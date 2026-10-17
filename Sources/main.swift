@@ -312,7 +312,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let f = DateFormatter(); f.dateFormat = "HH:mm"
         switch phase {
         case .stopped:
-            setStatusItem(symbol: "cat.fill", fallback: "zzz", title: "", tooltip: "stopped")
+            setStatusItem(symbol: "cat.circle.fill", fallback: "cat.fill", title: "", tooltip: "stopped")
             statusLabel.stringValue = "Stopped"
             startButton.title = "Start"
         case .working:
