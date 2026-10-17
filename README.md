@@ -38,7 +38,9 @@ Stored in the `io.github.interstellar0verdrive.siesta` defaults domain: `work`, 
 
 ## Is pausing safe for the files?
 
-Yes. `SIGSTOP` only suspends scheduling of the process; no operation is interrupted or cancelled. Pending disk writes complete identically on resume. It is the same mechanism macOS uses to suspend background apps. The only practical caveat: if Siesta is killed with `kill -9` while a worker is frozen, the worker stays frozen (the file is still fine). Unfreeze it with:
+Yes. `SIGSTOP` only suspends scheduling of the process; no operation is interrupted or cancelled. Pending disk writes complete identically on resume. It is the same mechanism macOS uses to suspend background apps.
+
+Siesta resumes a frozen worker whenever it stops the cycle, quits, or receives a termination signal (kill, logout). If it is ever killed with `kill -9` during a rest, the worker stays frozen (the file is still fine): the next launch of Siesta detects it and resumes it, or you can do it by hand:
 
 ```bash
 kill -CONT $(pgrep -x HandBrakeXPCService)

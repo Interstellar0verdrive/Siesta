@@ -285,6 +285,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         detachCheckbox.state = detached ? .on : .off
         logExpanded = detached
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
+        rescueFrozen()
+        installSignalHandlers()
         refresh()
         if CommandLine.arguments.contains("--start") { toggleRun() }
         // The status item must be laid out before a popover can attach to it.
@@ -292,6 +294,21 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     }
 
     func applicationWillTerminate(_ n: Notification) { resume() }
+
+    var signalSources: [DispatchSourceSignal] = []
+    /// kill / logout / Ctrl-C must never leave the encoder frozen.
+    func installSignalHandlers() {
+        for sig in [SIGTERM, SIGINT, SIGHUP] {
+            signal(sig, SIG_IGN)
+            let src = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+            src.setEventHandler { [weak self] in
+                self?.resume()
+                NSApp.terminate(nil)
+            }
+            src.resume()
+            signalSources.append(src)
+        }
+    }
 
     // MARK: Panel construction
     func divider() -> NSBox {
@@ -566,7 +583,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     }
 
     // MARK: Processes
-    struct Proc { let pid: pid_t; let cpu: Double; let path: String }
+    struct Proc { let pid: pid_t; let cpu: Double; let path: String; let frozen: Bool }
 
     func run(_ exe: String, _ args: [String]) -> String {
         let p = Process()
@@ -584,18 +601,27 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let pids = run("/usr/bin/pgrep", ["-f", target.bundleMarker])
             .split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         guard !pids.isEmpty else { return [] }
-        let out = run("/bin/ps", ["-o", "pid=,%cpu=,comm=", "-p", pids.joined(separator: ",")])
+        let out = run("/bin/ps", ["-o", "pid=,%cpu=,stat=,comm=", "-p", pids.joined(separator: ",")])
         return out.split(separator: "\n").compactMap { line in
-            let parts = line.trimmingCharacters(in: .whitespaces).split(separator: " ", maxSplits: 2).map(String.init)
-            guard parts.count == 3, let pid = Int32(parts[0]), let cpu = Double(parts[1]),
-                  parts[2].contains(target.bundleMarker) else { return nil }
-            return Proc(pid: pid, cpu: cpu, path: parts[2])
+            let parts = line.trimmingCharacters(in: .whitespaces).split(separator: " ", maxSplits: 3)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+            guard parts.count == 4, let pid = Int32(parts[0]), let cpu = Double(parts[1]),
+                  parts[3].contains(target.bundleMarker) else { return nil }
+            return Proc(pid: pid, cpu: cpu, path: parts[3], frozen: parts[2].hasPrefix("T"))
         }
     }
 
     func resume() {
         for pid in frozenPids { kill(pid, SIGCONT) }
         frozenPids = []
+    }
+
+    /// Unfreezes target processes left stopped by an earlier Siesta that did not exit cleanly.
+    func rescueFrozen() {
+        let stuck = targetProcesses().filter { $0.frozen }
+        guard !stuck.isEmpty else { return }
+        for p in stuck { kill(p.pid, SIGCONT) }
+        log("Resumed \(stuck.count) \(target.name) process\(stuck.count == 1 ? "" : "es") left frozen")
     }
 
     // MARK: Loop
