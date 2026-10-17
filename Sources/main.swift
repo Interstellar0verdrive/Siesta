@@ -204,6 +204,7 @@ final class FlatButton: NSButton {
     override var isHighlighted: Bool { didSet { needsDisplay = true } }
     // always in the Tab loop, not only with Full Keyboard Access; focus must be visible
     override var acceptsFirstResponder: Bool { true }
+    override var canBecomeKeyView: Bool { true }
     override var focusRingMaskBounds: NSRect { bounds }
     override func drawFocusRingMask() { NSBezierPath(roundedRect: bounds, xRadius: 8, yRadius: 8).fill() }
 }
@@ -386,6 +387,11 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         quitButton.setAccessibilityLabel("Quit Siesta")
         let footer = NSStackView(views: [detachCheckbox, NSView(), quitButton])
         footer.orientation = .horizontal; footer.alignment = .centerY
+        // Tab order: Work → Rest → Start/Stop → Quit → Work
+        workField.nextKeyView = restField
+        restField.nextKeyView = runButton
+        runButton.nextKeyView = quitButton
+        quitButton.nextKeyView = workField
 
         let column = NSStackView(views: [statusRow, progressWrap, divider(), settings, divider(), logBox, footer])
         column.orientation = .vertical
@@ -451,6 +457,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                 let w = NSWindow(contentRect: .zero, styleMask: [.titled, .closable], backing: .buffered, defer: false)
                 w.title = "Siesta"
                 w.isReleasedWhenClosed = false
+                w.autorecalculatesKeyViewLoop = false
                 window = w
             }
             window!.contentViewController = panelController
@@ -468,7 +475,10 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             guard let button = statusItem.button else { return }
             NSApp.activate(ignoringOtherApps: true)
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            DispatchQueue.main.async { [weak self] in self?.panelController.view.window?.makeFirstResponder(nil) }
+            DispatchQueue.main.async { [weak self] in
+                self?.panelController.view.window?.autorecalculatesKeyViewLoop = false
+                self?.panelController.view.window?.makeFirstResponder(nil)
+            }
         }
     }
 
