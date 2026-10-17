@@ -413,7 +413,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     /// Recomputes the panel size after a layout change (log toggled, mode switched).
     func layoutPanel() {
         logBox.expanded = logExpanded
-        logBox.count.stringValue = logCount == 0 ? "no events yet" : "\(logCount) event\(logCount == 1 ? "" : "s")"
+        logBox.count.stringValue = logCount == 0 ? "No events yet" : "\(logCount) event\(logCount == 1 ? "" : "s")"
         panelWidth.constant = detached ? windowWidth : popoverWidth
         panelController.view.layoutSubtreeIfNeeded()
         let size = panelController.view.fittingSize   // the container sizes the view: never set its frame by hand
@@ -480,7 +480,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     func clearLog() {
         logCount = 0
         showPlaceholder()
-        logBox.count.stringValue = "no events yet"
+        logBox.count.stringValue = "No events yet"
         logBox.clear.isHidden = true
         logBox.dot.isHidden = true
     }
