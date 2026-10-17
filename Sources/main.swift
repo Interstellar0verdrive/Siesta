@@ -38,6 +38,7 @@ final class LogBoxView: NSView {
     let chevron = NSImageView()
     let title = NSTextField(labelWithString: "Activity log")
     let count = NSTextField(labelWithString: "")
+    let dot = NSTextField(labelWithString: "·")
     let clear = NSButton(title: "Clear", target: nil, action: nil)
     let scroll = NSScrollView()
     let list = NSTextView()
@@ -65,8 +66,10 @@ final class LogBoxView: NSView {
             .underlineStyle: NSUnderlineStyle.single.rawValue])
         clear.target = self; clear.action = #selector(clearTapped)
         clear.setAccessibilityLabel("Clear activity log")
-        let row = NSStackView(views: [chevron, title, NSView(), count, clear])
-        row.setCustomSpacing(12, after: count)
+        dot.font = .systemFont(ofSize: 11); dot.textColor = .secondaryLabelColor
+        let row = NSStackView(views: [chevron, title, NSView(), count, dot, clear])
+        row.setCustomSpacing(5, after: count)
+        row.setCustomSpacing(5, after: dot)
         row.orientation = .horizontal; row.alignment = .centerY; row.spacing = 10
         row.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
         row.translatesAutoresizingMaskIntoConstraints = false
@@ -367,6 +370,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         logBox.onToggle = { [weak self] in self?.toggleLog() }
         logBox.onClear = { [weak self] in self?.clearLog() }
         logBox.clear.isHidden = true
+        logBox.dot.isHidden = true
 
         // Footer: secondary quit button, right aligned
         let quitButton = FlatButton(title: "Quit Siesta", primary: false)
@@ -478,6 +482,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         showPlaceholder()
         logBox.count.stringValue = "no events yet"
         logBox.clear.isHidden = true
+        logBox.dot.isHidden = true
     }
 
     @objc func quit() { NSApp.terminate(nil) }
@@ -632,6 +637,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         logCount += 1
         logBox.count.stringValue = "\(logCount) event\(logCount == 1 ? "" : "s")"
         logBox.clear.isHidden = false
+        logBox.dot.isHidden = false
     }
 
     func setStatus(symbol: NSImage?, panelSymbol: NSImage? = nil, title: String, subtitle: String, count: String, tooltip: String, barTitle: String) {
