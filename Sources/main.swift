@@ -504,12 +504,22 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             popover.contentSize = panelController.view.fittingSize
             guard let button = statusItem.button else { return }
             NSApp.activate(ignoringOtherApps: true)
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            // anchor the arrow to the icon, not to the whole icon + countdown button
+            popover.show(relativeTo: iconAnchor(), of: button, preferredEdge: .minY)
             DispatchQueue.main.async { [weak self] in
                 self?.panelController.view.window?.autorecalculatesKeyViewLoop = false
                 self?.panelController.view.window?.makeFirstResponder(nil)
             }
         }
+    }
+
+    /// Rect of the icon inside the status button, so the popover arrow stays centred on it
+    /// whatever the countdown next to it says.
+    func iconAnchor() -> NSRect {
+        guard let button = statusItem.button else { return .zero }
+        guard let image = button.image, !button.title.isEmpty else { return button.bounds }
+        let inset = (button.bounds.width - image.size.width - button.attributedTitle.size().width) / 2
+        return NSRect(x: 0, y: 0, width: image.size.width + 2 * max(0, inset), height: button.bounds.height)
     }
 
     @objc func toggleDetached() {
@@ -770,6 +780,13 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         statusItem.button?.image = symbol
         statusItem.button?.title = barTitle
         statusItem.button?.toolTip = "Siesta — " + tooltip
+        if popover.isShown {
+            // the button may have changed width: re-centre the arrow after layout
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self, self.popover.isShown else { return }
+                self.popover.positioningRect = self.iconAnchor()
+            }
+        }
     }
 
     func symbol(_ name: String, _ description: String) -> NSImage? {
