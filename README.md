@@ -1,18 +1,24 @@
 # Siesta
 
-<img src="Resources/icon/Siesta-light-1024.png" width="128" align="right" alt="Siesta icon: a cat sleeping in front of the sun">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="Resources/icon/Siesta-light-1024.png">
+  <source media="(prefers-color-scheme: light)" srcset="Resources/icon/Siesta-dark-1024.png">
+  <img src="Resources/icon/Siesta-light-1024.png" width="128" align="right" alt="Siesta icon: a cat sleeping in front of the sun">
+</picture>
 
 A tiny macOS menu bar utility that gives a long-running video encoder periodic rests, so a laptop does not run flat out for hours on a long job or a queue of files.
 
-Siesta counts the minutes the encoder has **actually** been working, then freezes it for a rest period and resumes it afterwards. Nothing is lost: the frozen process simply continues from where it was, the output file is untouched.
+Siesta counts the minutes the encoder has **actually** been working, then pauses it for a rest period and resumes it afterwards. The encoder simply continues from where it was: Siesta never restarts the job or touches the output file.
 
 Currently it watches **HandBrake**. The code is structured so other encoders (Tdarr, Topaz Video AI, plain ffmpeg…) can be added as profiles.
 
+![Illustration of Siesta in the macOS menu bar: HandBrake is working, with 12 minutes until the next pause and 18 of 30 work minutes elapsed](Resources/siesta-hero.png)
+
 ## How it works
 
-- Every second Siesta looks at the processes that belong to HandBrake and adds up their CPU usage. HandBrake does the real encoding in a separate XPC worker process, so that is what gets measured and paused; the HandBrake window stays responsive.
+- Every second Siesta looks at the processes that belong to HandBrake and adds up their CPU usage. HandBrake does the real encoding in a separate XPC worker: that is what Siesta pauses, so the HandBrake window stays responsive. If no worker can be identified, Siesta falls back to pausing the HandBrake processes it found.
 - **Work minutes** only advance while HandBrake is encoding (CPU above a threshold, 50 % by default). If the queue is finished or HandBrake is closed, Siesta waits and says so.
-- When the work minutes are up, the worker processes receive `SIGSTOP` for the configured **rest minutes**, then `SIGCONT`. CPU usage drops to zero during the rest.
+- When the work minutes are up, the worker receives `SIGSTOP` for the configured **rest minutes**, then `SIGCONT`. CPU usage drops to zero during the rest.
 - If HandBrake stays idle for at least the rest duration, the work counter resets: it already had its rest.
 - Stopping or quitting Siesta always resumes a frozen worker first.
 
@@ -24,11 +30,11 @@ Clicking it opens a popover with the current state and countdown, a thin progres
 
 Grab `Siesta-<version>.zip` from the [Releases](https://github.com/Interstellar0verdrive/Siesta/releases) page, unzip it and move `Siesta.app` to your Applications folder. The app is universal (Apple Silicon and Intel) and needs macOS 13 or later.
 
-Siesta is signed ad hoc, not notarized, so macOS will refuse to open it the first time. Try to open it once, then go to System Settings → Privacy & Security, scroll down to the message about Siesta and click **Open Anyway**. On older macOS versions a right-click → Open on the app is enough. This is only needed once.
+Siesta is signed ad hoc and is not notarized, so macOS blocks the first launch. Try to open it once, then go to System Settings → Privacy & Security, find the message about Siesta and click **Open Anyway**. On older macOS versions a right-click → Open on the app is enough. This is only needed once.
 
 ## Updates
 
-The current version is shown in small print next to the Quit button. At launch and every six hours Siesta asks GitHub for the latest release; when a newer one exists the version turns into an "Update to x.y.z" link that opens the release page. Nothing is downloaded or installed automatically.
+The current version is shown in small print next to the Quit button. While Siesta is running it asks GitHub for the latest release at launch and then every six hours; when a newer one exists the version turns into an "Update to x.y.z" link that opens the release page. Nothing runs while the app is closed, and nothing is downloaded or installed automatically.
 
 ## Building
 
@@ -48,9 +54,9 @@ Stored in the `io.github.interstellar0verdrive.siesta` defaults domain: `work`, 
 
 ## Is pausing safe for the files?
 
-Yes. `SIGSTOP` only suspends scheduling of the process; no operation is interrupted or cancelled. Pending disk writes complete identically on resume. It is the same mechanism macOS uses to suspend background apps.
+A pause is `SIGSTOP`, which only suspends scheduling of the worker; `SIGCONT` lets it continue exactly where it was, and pending disk writes complete on resume. Siesta never reads, deletes or rewrites the output file. It cannot protect against unrelated failures such as a crash, a power loss or HandBrake being force-quit during an encode, exactly as without Siesta.
 
-Siesta resumes a frozen worker whenever it stops the cycle, quits, or receives a termination signal (kill, logout). If it is ever killed with `kill -9` during a rest, the worker stays frozen (the file is still fine): the next launch of Siesta detects it and resumes it, or you can do it by hand:
+Siesta resumes a frozen worker when you stop the cycle, quit, or when it receives a termination signal (kill, logout). A `kill -9` cannot be intercepted and may leave the worker frozen; the file is still fine, and the next launch of Siesta detects and resumes it. You can also resume HandBrake's worker by hand:
 
 ```bash
 kill -CONT $(pgrep -x HandBrakeXPCService)
