@@ -433,6 +433,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             if !window!.isVisible { window!.center() }
             NSApp.activate(ignoringOtherApps: true)
             window!.makeKeyAndOrderFront(nil)
+            DispatchQueue.main.async { [weak self] in self?.window?.makeFirstResponder(nil) }
         } else {
             window?.orderOut(nil)
             window?.contentViewController = nil
@@ -442,6 +443,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             guard let button = statusItem.button else { return }
             NSApp.activate(ignoringOtherApps: true)
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            DispatchQueue.main.async { [weak self] in self?.panelController.view.window?.makeFirstResponder(nil) }
         }
     }
 
@@ -475,6 +477,20 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             log("Cycle stopped")
         }
         refresh()
+    }
+
+    func controlTextDidChange(_ n: Notification) {
+        guard let field = n.object as? NSTextField, let editor = field.currentEditor() else { return }
+        let digits = editor.string.filter { $0.isASCII && $0.isNumber }
+        if digits != editor.string { editor.string = digits }
+    }
+
+    func control(_ control: NSControl, didFailToFormatString string: String, errorDescription error: String?) -> Bool {
+        // empty, zero or out of range: fall back to the saved value
+        if let field = control as? NSTextField {
+            field.integerValue = max(1, defaults.integer(forKey: field === workField ? "work" : "rest"))
+        }
+        return true
     }
 
     func controlTextDidBeginEditing(_ n: Notification) {
