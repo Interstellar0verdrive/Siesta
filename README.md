@@ -34,7 +34,11 @@ Clicking it opens a popover with the current state and countdown, a thin progres
 
 Grab `Siesta-<version>.zip` from the [Releases](https://github.com/Interstellar0verdrive/Siesta/releases) page, unzip it and move `Siesta.app` to your Applications folder. The app is universal (Apple Silicon and Intel) and needs macOS 13 or later.
 
-Siesta is signed ad hoc and is not notarized, so macOS blocks the first launch. Try to open it once, then go to System Settings → Privacy & Security, find the message about Siesta and click **Open Anyway**. On older macOS versions a right-click → Open on the app is enough. This is only needed once.
+Siesta is signed ad hoc and is not notarized, so macOS blocks the first launch with a "Siesta was not opened" dialog. Click **Done**, then go to System Settings → Privacy & Security, find the message about Siesta and click **Open Anyway**. This is only needed once. If you prefer the Terminal, removing the quarantine flag has the same effect:
+
+```bash
+xattr -d com.apple.quarantine /Applications/Siesta.app
+```
 
 ## Updates
 
