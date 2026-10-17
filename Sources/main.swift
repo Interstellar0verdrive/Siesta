@@ -619,7 +619,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
     func showPlaceholder() {
         logView.textStorage?.setAttributedString(NSAttributedString(string: "No events yet.", attributes: [
-            .font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.tertiaryLabelColor]))
+            .font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.secondaryLabelColor]))
     }
 
     func log(_ s: String) {
