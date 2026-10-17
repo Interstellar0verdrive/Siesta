@@ -2,7 +2,7 @@
 
 <img src="Resources/icon/Siesta-light-1024.png" width="128" align="right" alt="Siesta icon: a cat sleeping in front of the sun">
 
-A tiny macOS menu bar utility that gives a long-running video encoder periodic rests, so a laptop does not run flat out for hours while converting a whole season.
+A tiny macOS menu bar utility that gives a long-running video encoder periodic rests, so a laptop does not run flat out for hours on a long job or a queue of files.
 
 Siesta counts the minutes the encoder has **actually** been working, then freezes it for a rest period and resumes it afterwards. Nothing is lost: the frozen process simply continues from where it was, the output file is untouched.
 
@@ -20,6 +20,12 @@ The menu bar item shows the current state with system symbols: a sleeping cat fa
 
 Clicking it opens a popover with the current state and countdown, a thin progress line for the running interval, the Work and Rest minutes, the Start/Stop cycle button, a collapsible activity log and a Quit button. The "Detached window" checkbox moves the same panel into a regular window; unchecking it brings the popover back. Changing the minutes while Siesta is running takes effect immediately and is noted in the log. "Stop cycle" stops Siesta's cycle only, never the encoder.
 
+## Download
+
+Grab `Siesta-<version>.zip` from the [Releases](https://github.com/Interstellar0verdrive/Siesta/releases) page, unzip it and move `Siesta.app` to your Applications folder. The app is universal (Apple Silicon and Intel) and needs macOS 13 or later.
+
+Siesta is signed ad hoc, not notarized, so macOS will refuse to open it the first time. Try to open it once, then go to System Settings → Privacy & Security, scroll down to the message about Siesta and click **Open Anyway**. On older macOS versions a right-click → Open on the app is enough. This is only needed once.
+
 ## Building
 
 Only the Xcode Command Line Tools are needed:
@@ -28,7 +34,7 @@ Only the Xcode Command Line Tools are needed:
 ./build.sh
 ```
 
-The app is produced at `build/Siesta.app`. It is ad-hoc signed, so the first launch may require right-click → Open.
+The app is produced at `build/Siesta.app` as a universal binary; `./build.sh --zip` also packages it for a release.
 
 Launching the binary with `--start` starts the cycle immediately with the last saved values.
 
