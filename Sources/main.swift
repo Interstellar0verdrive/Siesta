@@ -25,6 +25,52 @@ final class BackgroundView: NSView {
     override func mouseDown(with event: NSEvent) { window?.makeFirstResponder(nil) }
 }
 
+/// Fully clickable header of the activity log: chevron, title, event count, with its own fill and border.
+final class LogHeaderView: NSView {
+    let chevron = NSImageView()
+    let title = NSTextField(labelWithString: "Activity log")
+    let count = NSTextField(labelWithString: "")
+    var onClick: (() -> Void)?
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 8
+        layer?.borderWidth = 1
+        chevron.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
+        chevron.contentTintColor = .secondaryLabelColor
+        chevron.widthAnchor.constraint(equalToConstant: 14).isActive = true
+        title.font = .systemFont(ofSize: 13, weight: .medium)
+        count.font = .systemFont(ofSize: 11)
+        count.textColor = .secondaryLabelColor
+        count.alignment = .right
+        let row = NSStackView(views: [chevron, title, NSView(), count])
+        row.orientation = .horizontal; row.alignment = .centerY; row.spacing = 10
+        row.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
+        row.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(row)
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: leadingAnchor), row.trailingAnchor.constraint(equalTo: trailingAnchor),
+            row.topAnchor.constraint(equalTo: topAnchor), row.bottomAnchor.constraint(equalTo: bottomAnchor),
+            heightAnchor.constraint(equalToConstant: 44),
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    var expanded = false {
+        didSet {
+            chevron.image = NSImage(systemSymbolName: expanded ? "chevron.down" : "chevron.right",
+                                    accessibilityDescription: expanded ? "Collapse activity log" : "Expand activity log")
+        }
+    }
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {
+        layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.06).cgColor
+        layer?.borderColor = NSColor.labelColor.withAlphaComponent(0.14).cgColor
+    }
+    override func mouseDown(with event: NSEvent) { onClick?() }
+}
+
 final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     // MARK: UI
     var statusItem: NSStatusItem!
@@ -45,8 +91,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     let restField = NSTextField()
     let runButton = NSButton(title: "Start cycle", target: nil, action: nil)
     let detachCheckbox = NSButton(checkboxWithTitle: "Detached window", target: nil, action: nil)
-    let activityToggle = NSButton(title: "", target: nil, action: nil)
-    let activityCount = NSTextField(labelWithString: "")
+    let activityHeader = LogHeaderView()
     let logScroll = NSScrollView()
     let logView = NSTextView()
     var logExpanded = false
@@ -169,22 +214,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         actions.orientation = .horizontal; actions.alignment = .centerY; actions.spacing = 12
 
         // Activity log: fully clickable header with chevron, collapsible list
-        activityToggle.target = self; activityToggle.action = #selector(toggleLog)
-        activityToggle.bezelStyle = .texturedRounded
-        activityToggle.imagePosition = .imageLeading
-        activityToggle.alignment = .left
-        activityToggle.font = .systemFont(ofSize: 13, weight: .medium)
-        activityToggle.title = "Activity log"
-        activityToggle.heightAnchor.constraint(equalToConstant: 32).isActive = true
-        activityCount.font = .systemFont(ofSize: 11); activityCount.textColor = .secondaryLabelColor
-        activityCount.alignment = .right
-        activityToggle.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        activityToggle.addSubview(activityCount)
-        activityCount.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            activityCount.trailingAnchor.constraint(equalTo: activityToggle.trailingAnchor, constant: -12),
-            activityCount.centerYAnchor.constraint(equalTo: activityToggle.centerYAnchor),
-        ])
+        activityHeader.onClick = { [weak self] in self?.toggleLog() }
         logScroll.hasVerticalScroller = true
         logScroll.borderType = .noBorder
         logScroll.drawsBackground = false
@@ -203,27 +233,21 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
         // Footer: secondary quit button, right aligned
         let quitButton = NSButton(title: "Quit Siesta", target: self, action: #selector(quit))
-        quitButton.bezelStyle = .rounded; quitButton.controlSize = .small
+        quitButton.bezelStyle = .rounded
         let footer = NSStackView(views: [NSView(), quitButton])
         footer.orientation = .horizontal
 
-        let column = NSStackView(views: [statusRow, progressWrap, divider(), grid, actions, divider(), activityToggle, logScroll, footer])
+        let column = NSStackView(views: [statusRow, progressWrap, divider(), grid, actions, divider(), activityHeader, logScroll, footer])
         column.orientation = .vertical
         column.alignment = .width
-        column.spacing = 17
+        column.spacing = 19
         column.setCustomSpacing(19, after: progressWrap)
         column.setCustomSpacing(23, after: grid)
         column.setCustomSpacing(19, after: actions)
-        column.setCustomSpacing(8, after: activityToggle)
-        column.setCustomSpacing(12, after: logScroll)
-        column.edgeInsets = NSEdgeInsets(top: 22, left: 24, bottom: 15, right: 24)
+        column.setCustomSpacing(10, after: activityHeader)
+        column.setCustomSpacing(16, after: logScroll)
+        column.edgeInsets = NSEdgeInsets(top: 22, left: 24, bottom: 20, right: 24)
         column.translatesAutoresizingMaskIntoConstraints = false
-        // NSStackView does not stretch a button on its own: pin it to the column edges.
-        NSLayoutConstraint.activate([
-            activityToggle.leadingAnchor.constraint(equalTo: column.leadingAnchor, constant: 24),
-            activityToggle.trailingAnchor.constraint(equalTo: column.trailingAnchor, constant: -24),
-        ])
-
         let background = BackgroundView()
         background.addSubview(column)
         panelWidth = background.widthAnchor.constraint(equalToConstant: popoverWidth)
@@ -242,9 +266,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     /// Recomputes the panel size after a layout change (log toggled, mode switched).
     func layoutPanel() {
         logScroll.isHidden = !logExpanded
-        activityToggle.image = NSImage(systemSymbolName: logExpanded ? "chevron.down" : "chevron.right",
-                                       accessibilityDescription: logExpanded ? "Collapse" : "Expand")
-        activityCount.stringValue = logCount == 0 ? "no events yet" : "\(logCount) event\(logCount == 1 ? "" : "s")"
+        activityHeader.expanded = logExpanded
+        activityHeader.count.stringValue = logCount == 0 ? "no events yet" : "\(logCount) event\(logCount == 1 ? "" : "s")"
         panelWidth.constant = detached ? windowWidth : popoverWidth
         let size = panelController.view.fittingSize
         panelController.view.frame = NSRect(origin: .zero, size: size)
@@ -427,7 +450,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         logView.textStorage?.append(line)
         logView.scrollToEndOfDocument(nil)
         logCount += 1
-        activityCount.stringValue = "\(logCount) event\(logCount == 1 ? "" : "s")"
+        activityHeader.count.stringValue = "\(logCount) event\(logCount == 1 ? "" : "s")"
     }
 
     func setStatus(symbol: NSImage?, title: String, subtitle: String, count: String, tooltip: String, barTitle: String) {
