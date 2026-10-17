@@ -298,14 +298,17 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         // Big run button filling the right half, as tall as the two rows
         runButton.target = self; runButton.action = #selector(toggleRun)
         runButton.keyEquivalent = "\r"
-        runButton.font = .systemFont(ofSize: 15, weight: .semibold)
+        runButton.font = .systemFont(ofSize: 15, weight: .medium)
         runButton.updateTitleColor()
         runButton.setContentHuggingPriority(.defaultLow, for: .horizontal)
         runButton.setContentHuggingPriority(.defaultLow, for: .vertical)
-        let settings = NSStackView(views: [grid, runButton])
+        // grid flush left, button flush right taking half the width
+        let settings = NSStackView(views: [grid, NSView(), runButton])
         settings.orientation = .horizontal; settings.alignment = .top; settings.spacing = 24
-        settings.distribution = .fillEqually
-        runButton.heightAnchor.constraint(equalTo: grid.heightAnchor).isActive = true
+        NSLayoutConstraint.activate([
+            runButton.heightAnchor.constraint(equalTo: grid.heightAnchor),
+            runButton.widthAnchor.constraint(equalTo: settings.widthAnchor, multiplier: 0.5, constant: -12),
+        ])
         detachCheckbox.target = self; detachCheckbox.action = #selector(toggleDetached)
 
         // Activity log box
