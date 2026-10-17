@@ -38,9 +38,11 @@ final class LogBoxView: NSView {
     let chevron = NSImageView()
     let title = NSTextField(labelWithString: "Activity log")
     let count = NSTextField(labelWithString: "")
+    let clear = NSButton(title: "Clear", target: nil, action: nil)
     let scroll = NSScrollView()
     let list = NSTextView()
     var onToggle: (() -> Void)?
+    var onClear: (() -> Void)?
 
     init() {
         super.init(frame: .zero)
@@ -56,7 +58,14 @@ final class LogBoxView: NSView {
         count.font = .systemFont(ofSize: 11)
         count.textColor = .secondaryLabelColor
         count.alignment = .right
-        let row = NSStackView(views: [chevron, title, NSView(), count])
+        clear.isBordered = false
+        clear.font = .systemFont(ofSize: 11)
+        clear.attributedTitle = NSAttributedString(string: "Clear", attributes: [
+            .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.controlAccentColor])
+        clear.target = self; clear.action = #selector(clearTapped)
+        clear.setAccessibilityLabel("Clear activity log")
+        let row = NSStackView(views: [chevron, title, NSView(), count, clear])
+        row.setCustomSpacing(12, after: count)
         row.orientation = .horizontal; row.alignment = .centerY; row.spacing = 10
         row.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
         row.translatesAutoresizingMaskIntoConstraints = false
@@ -99,6 +108,7 @@ final class LogBoxView: NSView {
     }
     required init?(coder: NSCoder) { fatalError() }
     private var separator: NSBox!
+    @objc func clearTapped() { onClear?() }
 
     var expanded = false {
         didSet {
@@ -354,6 +364,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
         // Activity log box
         logBox.onToggle = { [weak self] in self?.toggleLog() }
+        logBox.onClear = { [weak self] in self?.clearLog() }
+        logBox.clear.isHidden = true
 
         // Footer: secondary quit button, right aligned
         let quitButton = FlatButton(title: "Quit Siesta", primary: false)
@@ -458,6 +470,13 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         logExpanded.toggle()
         layoutPanel()
         if logExpanded { logView.scrollToEndOfDocument(nil) }
+    }
+
+    func clearLog() {
+        logCount = 0
+        showPlaceholder()
+        logBox.count.stringValue = "no events yet"
+        logBox.clear.isHidden = true
     }
 
     @objc func quit() { NSApp.terminate(nil) }
@@ -611,6 +630,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         logView.scrollToEndOfDocument(nil)
         logCount += 1
         logBox.count.stringValue = "\(logCount) event\(logCount == 1 ? "" : "s")"
+        logBox.clear.isHidden = false
     }
 
     func setStatus(symbol: NSImage?, panelSymbol: NSImage? = nil, title: String, subtitle: String, count: String, tooltip: String, barTitle: String) {
