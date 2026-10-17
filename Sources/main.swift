@@ -25,6 +25,11 @@ final class BackgroundView: NSView {
     override func mouseDown(with event: NSEvent) { window?.makeFirstResponder(nil) }
 }
 
+/// Read-only log text that stays out of the Tab loop.
+final class LogTextView: NSTextView {
+    override var acceptsFirstResponder: Bool { false }
+}
+
 /// Row that reports clicks to a closure.
 final class ClickableRow: NSView {
     var onClick: (() -> Void)?
@@ -41,7 +46,7 @@ final class LogBoxView: NSView {
     let dot = NSTextField(labelWithString: "·")
     let clear = NSButton(title: "Clear", target: nil, action: nil)
     let scroll = NSScrollView()
-    let list = NSTextView()
+    let list = LogTextView()
     var onToggle: (() -> Void)?
     var onClear: (() -> Void)?
 
@@ -197,7 +202,8 @@ final class FlatButton: NSButton {
         }
     }
     override var isHighlighted: Bool { didSet { needsDisplay = true } }
-    // keyboard focus must be visible on a custom-drawn button
+    // always in the Tab loop, not only with Full Keyboard Access; focus must be visible
+    override var acceptsFirstResponder: Bool { true }
     override var focusRingMaskBounds: NSRect { bounds }
     override func drawFocusRingMask() { NSBezierPath(roundedRect: bounds, xRadius: 8, yRadius: 8).fill() }
 }
