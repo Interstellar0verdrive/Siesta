@@ -291,9 +291,13 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let grid = NSGridView(views: [[workLabel, numberField(workField, "Work minutes")],
                                       [restLabel, numberField(restField, "Rest minutes")]])
         grid.rowSpacing = 13; grid.columnSpacing = 12
+        grid.xPlacement = .leading
+        grid.column(at: 0).xPlacement = .leading
         grid.column(at: 1).xPlacement = .trailing
         grid.rowAlignment = .firstBaseline
         grid.translatesAutoresizingMaskIntoConstraints = false
+        grid.setContentHuggingPriority(.required, for: .horizontal)
+        grid.widthAnchor.constraint(equalToConstant: grid.fittingSize.width).isActive = true   // never stretch
 
         // Big run button filling the right half, as tall as the two rows
         runButton.target = self; runButton.action = #selector(toggleRun)
@@ -303,8 +307,10 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         runButton.setContentHuggingPriority(.defaultLow, for: .horizontal)
         runButton.setContentHuggingPriority(.defaultLow, for: .vertical)
         // grid flush left, button flush right taking half the width
-        let settings = NSStackView(views: [grid, NSView(), runButton])
+        let settings = NSStackView()
         settings.orientation = .horizontal; settings.alignment = .top; settings.spacing = 24
+        settings.addView(grid, in: .leading)
+        settings.addView(runButton, in: .trailing)
         NSLayoutConstraint.activate([
             runButton.heightAnchor.constraint(equalTo: grid.heightAnchor),
             runButton.widthAnchor.constraint(equalTo: settings.widthAnchor, multiplier: 0.5, constant: -12),
@@ -328,6 +334,12 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         column.setCustomSpacing(19, after: progressWrap)
         column.edgeInsets = NSEdgeInsets(top: 22, left: 24, bottom: 20, right: 24)
         column.translatesAutoresizingMaskIntoConstraints = false
+        // the column does not stretch a stack with intrinsic width by itself: pin it to the edges
+        NSLayoutConstraint.activate([
+            settings.leadingAnchor.constraint(equalTo: column.leadingAnchor, constant: 24),
+            settings.trailingAnchor.constraint(equalTo: column.trailingAnchor, constant: -24),
+        ])
+
         let background = BackgroundView()
         background.addSubview(column)
         panelWidth = background.widthAnchor.constraint(equalToConstant: popoverWidth)
