@@ -952,7 +952,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     }
 
     func symbol(_ name: String, _ description: String) -> NSImage? {
-        NSImage(systemSymbolName: name, accessibilityDescription: description)
+        // sized like the 18 px template icons that sit next to it in the menu bar
+        NSImage(systemSymbolName: name, accessibilityDescription: description)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 16, weight: .medium))
     }
 
     func refresh() {
