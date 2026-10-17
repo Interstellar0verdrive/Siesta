@@ -61,7 +61,8 @@ final class LogBoxView: NSView {
         clear.isBordered = false
         clear.font = .systemFont(ofSize: 11)
         clear.attributedTitle = NSAttributedString(string: "Clear", attributes: [
-            .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.controlAccentColor])
+            .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.labelColor,
+            .underlineStyle: NSUnderlineStyle.single.rawValue])
         clear.target = self; clear.action = #selector(clearTapped)
         clear.setAccessibilityLabel("Clear activity log")
         let row = NSStackView(views: [chevron, title, NSView(), count, clear])
