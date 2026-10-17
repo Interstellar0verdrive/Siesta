@@ -11,7 +11,7 @@ swiftc -O -swift-version 5 -target arm64-apple-macos13  -o build/obj/Siesta-arm6
 swiftc -O -swift-version 5 -target x86_64-apple-macos13 -o build/obj/Siesta-x86_64 Sources/main.swift
 lipo -create build/obj/Siesta-arm64 build/obj/Siesta-x86_64 -output "$APP/Contents/MacOS/Siesta"
 cp Resources/Info.plist "$APP/Contents/"
-cp Resources/Siesta.icns Resources/SiestaInactive.png Resources/SiestaInactive@2x.png Resources/SiestaStandby.pdf "$APP/Contents/Resources/"
+cp Resources/Siesta.icns Resources/states/*.png "$APP/Contents/Resources/"
 codesign --force --sign - "$APP"
 echo "Built: $APP ($VERSION, $(lipo -archs "$APP/Contents/MacOS/Siesta"))"
 if [[ "$1" == "--zip" ]]; then

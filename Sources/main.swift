@@ -263,20 +263,15 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     var restMinutes: Double { max(1, Double(restField.integerValue)) }
     var detached: Bool { defaults.bool(forKey: "window") }
 
-    static let standbyIcon: NSImage? = {
-        guard let url = Bundle.main.url(forResource: "SiestaStandby", withExtension: "pdf"),
-              let img = NSImage(contentsOf: url) else { return nil }
-        img.isTemplate = true
-        img.accessibilityDescription = "Siesta in standby"
-        return img
-    }()
-
-    static let inactiveIcon: NSImage? = {
-        let img = NSImage(named: "SiestaInactive")
+    /// Cat icons for the four states: black template PNGs (menu bar 20 pt, panel 48 pt)
+    /// that follow the appearance like system symbols.
+    static func stateIcon(_ state: String, panel: Bool, description: String) -> NSImage? {
+        let img = NSImage(named: (panel ? "panel-" : "state-") + state)
+        img?.size = NSSize(width: panel ? 48 : 20, height: panel ? 48 : 20)   // the PNG dpi metadata must not shrink it
         img?.isTemplate = true
-        img?.accessibilityDescription = "Siesta inactive"
+        img?.accessibilityDescription = description
         return img
-    }()
+    }
 
     // MARK: Lifecycle
     func applicationDidFinishLaunching(_ n: Notification) {
@@ -338,7 +333,6 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     func buildPanel() {
         // Status row: symbol, title + subtitle, big countdown on the right
         statusSymbol.imageScaling = .scaleProportionallyUpOrDown
-        statusSymbol.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 26, weight: .regular)
         statusSymbol.widthAnchor.constraint(equalToConstant: 34).isActive = true
         statusSymbol.heightAnchor.constraint(equalToConstant: 34).isActive = true
         statusTitle.font = .systemFont(ofSize: 16, weight: .medium)
@@ -933,13 +927,13 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         logBox.dot.isHidden = false
     }
 
-    func setStatus(symbol: NSImage?, panelSymbol: NSImage? = nil, title: String, subtitle: String, count: String, tooltip: String, barTitle: String) {
-        statusSymbol.image = panelSymbol ?? symbol
-        statusSymbol.contentTintColor = panelSymbol == nil ? nil : NSColor.labelColor.withAlphaComponent(0.82)
+    func setStatus(state: String, description: String, title: String, subtitle: String, count: String, tooltip: String, barTitle: String) {
+        statusSymbol.image = App.stateIcon(state, panel: true, description: description)
+        statusSymbol.contentTintColor = NSColor.labelColor.withAlphaComponent(0.82)
         statusTitle.stringValue = title
         statusSubtitle.stringValue = subtitle
         countdown.stringValue = count
-        statusItem.button?.image = symbol
+        statusItem.button?.image = App.stateIcon(state, panel: false, description: description)
         statusItem.button?.title = barTitle
         statusItem.button?.toolTip = "Siesta — " + tooltip
         if popover.isShown {
@@ -951,12 +945,6 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         }
     }
 
-    func symbol(_ name: String, _ description: String) -> NSImage? {
-        // sized like the 18 px template icons that sit next to it in the menu bar
-        NSImage(systemSymbolName: name, accessibilityDescription: description)?
-            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 16, weight: .medium))
-    }
-
     func refresh() {
         let f = DateFormatter(); f.dateFormat = "HH:mm"
         let hideProgress = phase == .stopped
@@ -966,7 +954,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         }
         switch phase {
         case .stopped:
-            setStatus(symbol: App.inactiveIcon, panelSymbol: App.standbyIcon, title: "Cycle stopped",
+            setStatus(state: "stopped", description: "Siesta inactive", title: "Cycle stopped",
                       subtitle: "\(target.name) is not managed by Siesta", count: "—",
                       tooltip: "inactive", barTitle: "")
             runButton.title = "Start cycle"
@@ -978,11 +966,11 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             progressLabel.stringValue = "Work interval"
             progressDetail.stringValue = "\(Int(elapsed / 60)) of \(Int(workMinutes)) min elapsed"
             if isEncoding {
-                setStatus(symbol: symbol("play.circle.fill", "Working"), title: "\(target.name) is working",
+                setStatus(state: "working", description: "Working", title: "\(target.name) is working",
                           subtitle: "Next pause", count: "\(left)m",
                           tooltip: "\(target.name) is working, pause in \(left) min", barTitle: "\(left)m")
             } else {
-                setStatus(symbol: symbol("hourglass.circle.fill", "Waiting"), title: "Waiting for \(target.name)",
+                setStatus(state: "waiting", description: "Waiting", title: "Waiting for \(target.name)",
                           subtitle: "\(target.name) is not encoding", count: "\(left)m",
                           tooltip: "waiting, \(target.name) is not encoding", barTitle: "")
             }
@@ -994,7 +982,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             progress.doubleValue = elapsed / total
             progressLabel.stringValue = "Rest interval"
             progressDetail.stringValue = "\(Int(elapsed / 60)) of \(Int(restMinutes)) min elapsed"
-            setStatus(symbol: symbol("pause.circle.fill", "Resting"), title: "\(target.name) is resting",
+            setStatus(state: "resting", description: "Resting", title: "\(target.name) is resting",
                       subtitle: "Resumes at \(f.string(from: restStart.addingTimeInterval(total)))", count: "\(left)m",
                       tooltip: "resting, \(target.name) resumes in \(left) min", barTitle: "\(left)m")
             runButton.title = "Stop cycle"
