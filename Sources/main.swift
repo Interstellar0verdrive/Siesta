@@ -115,6 +115,37 @@ final class LogBoxView: NSView {
     }
 }
 
+/// Bordered container for a number field: clear border in both appearances, accent border while editing.
+final class NumberBox: NSView {
+    let field = NSTextField()
+    var editing = false { didSet { needsDisplay = true } }
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 7
+        layer?.borderWidth = 1
+        layer?.masksToBounds = true
+        field.isBezeled = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(field)
+        NSLayoutConstraint.activate([
+            field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            field.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            field.centerYAnchor.constraint(equalTo: centerYAnchor),
+            widthAnchor.constraint(equalToConstant: 72),
+            heightAnchor.constraint(equalToConstant: 30),
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {
+        layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.06).cgColor
+        layer?.borderColor = editing ? NSColor.controlAccentColor.cgColor : NSColor.labelColor.withAlphaComponent(0.35).cgColor
+    }
+}
+
 /// Flat button in the prototype style: rounded 8 pt, thin border, generous padding.
 /// Primary = accent fill with white text; secondary = subtle fill with label text.
 final class FlatButton: NSButton {
@@ -170,8 +201,10 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     let progress = NSProgressIndicator()
     let progressLabel = NSTextField(labelWithString: "")
     let progressDetail = NSTextField(labelWithString: "")
-    let workField = NSTextField()
-    let restField = NSTextField()
+    let workBox = NumberBox()
+    let restBox = NumberBox()
+    var workField: NSTextField { workBox.field }
+    var restField: NSTextField { restBox.field }
     let runButton = FlatButton(title: "Start cycle", primary: true)
     let detachCheckbox = NSButton(checkboxWithTitle: "Detached window", target: nil, action: nil)
     let logBox = LogBoxView()
@@ -214,6 +247,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         // Hidden switch for checking both appearances: --appearance light|dark
         if let i = CommandLine.arguments.firstIndex(of: "--appearance"), i + 1 < CommandLine.arguments.count {
             NSApp.appearance = NSAppearance(named: CommandLine.arguments[i + 1] == "dark" ? .darkAqua : .aqua)
+            popover.appearance = NSApp.appearance
         }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.target = self
@@ -271,8 +305,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         progressWrap.orientation = .vertical; progressWrap.alignment = .width; progressWrap.spacing = 4
 
         // Settings grid: labels on the left, field + unit flush right
-        func numberField(_ field: NSTextField, _ label: String) -> NSView {
-            field.widthAnchor.constraint(equalToConstant: 72).isActive = true
+        func numberField(_ box: NumberBox, _ label: String) -> NSView {
+            let field = box.field
             field.alignment = .right
             field.font = .systemFont(ofSize: 15)
             field.setAccessibilityLabel(label)
@@ -283,18 +317,19 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             unit.font = .systemFont(ofSize: 13); unit.textColor = .secondaryLabelColor
             unit.alignment = .right
             unit.widthAnchor.constraint(equalToConstant: 24).isActive = true
-            let s = NSStackView(views: [field, unit]); s.orientation = .horizontal; s.spacing = 9
+            let s = NSStackView(views: [box, unit]); s.orientation = .horizontal; s.alignment = .centerY; s.spacing = 9
             return s
         }
         let workLabel = NSTextField(labelWithString: "Work"); workLabel.font = .systemFont(ofSize: 14)
         let restLabel = NSTextField(labelWithString: "Rest"); restLabel.font = .systemFont(ofSize: 14)
-        let grid = NSGridView(views: [[workLabel, numberField(workField, "Work minutes")],
-                                      [restLabel, numberField(restField, "Rest minutes")]])
+        let grid = NSGridView(views: [[workLabel, numberField(workBox, "Work minutes")],
+                                      [restLabel, numberField(restBox, "Rest minutes")]])
         grid.rowSpacing = 13; grid.columnSpacing = 12
         grid.xPlacement = .leading
         grid.column(at: 0).xPlacement = .leading
         grid.column(at: 1).xPlacement = .trailing
-        grid.rowAlignment = .firstBaseline
+        grid.rowAlignment = .none
+        grid.yPlacement = .center
         grid.translatesAutoresizingMaskIntoConstraints = false
         grid.setContentHuggingPriority(.required, for: .horizontal)
         grid.widthAnchor.constraint(equalToConstant: grid.fittingSize.width).isActive = true   // never stretch
@@ -442,8 +477,13 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         refresh()
     }
 
+    func controlTextDidBeginEditing(_ n: Notification) {
+        (n.object as? NSTextField)?.superview.flatMap { $0 as? NumberBox }?.editing = true
+    }
+
     func controlTextDidEndEditing(_ n: Notification) {
         guard let field = n.object as? NSTextField else { return }
+        (field.superview as? NumberBox)?.editing = false
         let key = field === workField ? "work" : "rest"
         let name = field === workField ? "Work" : "Rest"
         let old = defaults.integer(forKey: key)
