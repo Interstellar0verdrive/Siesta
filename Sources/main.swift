@@ -980,7 +980,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                           subtitle: "Next pause", count: "\(left)m",
                           tooltip: "\(target.name) is working, pause in \(left) min", barTitle: "\(left)m")
             } else {
-                setStatus(symbol: symbol("hourglass", "Waiting"), title: "Waiting for \(target.name)",
+                setStatus(symbol: symbol("hourglass.circle.fill", "Waiting"), title: "Waiting for \(target.name)",
                           subtitle: "\(target.name) is not encoding", count: "\(left)m",
                           tooltip: "waiting, \(target.name) is not encoding", barTitle: "")
             }
