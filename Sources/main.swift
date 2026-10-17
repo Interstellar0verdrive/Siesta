@@ -293,7 +293,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             column.bottomAnchor.constraint(equalTo: background.bottomAnchor),
             panelWidth,
         ])
+        background.autoresizingMask = [.width, .height]   // follow the popover / window content area
         panelController.view = background
+        showPlaceholder()
         popover.behavior = .transient
         popover.animates = true
     }
@@ -473,7 +475,13 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         refresh()
     }
 
+    func showPlaceholder() {
+        logView.textStorage?.setAttributedString(NSAttributedString(string: "No events yet.", attributes: [
+            .font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.tertiaryLabelColor]))
+    }
+
     func log(_ s: String) {
+        if logCount == 0 { logView.textStorage?.setAttributedString(NSAttributedString(string: "")) }
         let f = DateFormatter(); f.dateFormat = "HH:mm"
         let para = NSMutableParagraphStyle()
         para.tabStops = [NSTextTab(textAlignment: .left, location: 46)]
