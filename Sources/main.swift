@@ -232,6 +232,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     let runButton = FlatButton(title: "Start cycle", primary: true)
     let detachCheckbox = NSButton(checkboxWithTitle: "Detached window", target: nil, action: nil)
     let logBox = LogBoxView()
+    let versionLink = NSButton(title: "", target: nil, action: nil)
+    var updateURL: URL?
     var logView: NSTextView { logBox.list }
     var logExpanded = false
     var logCount = 0
@@ -287,6 +289,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
         rescueFrozen()
         installSignalHandlers()
+        checkForUpdate()
+        Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in self?.checkForUpdate() }
         refresh()
         if CommandLine.arguments.contains("--start") { toggleRun() }
         // The status item must be laid out before a popover can attach to it.
@@ -403,8 +407,13 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let quitButton = FlatButton(title: "Quit Siesta", primary: false)
         quitButton.target = self; quitButton.action = #selector(quit)
         quitButton.setAccessibilityLabel("Quit Siesta")
-        let footer = NSStackView(views: [detachCheckbox, NSView(), quitButton])
+        versionLink.isBordered = false
+        versionLink.target = self; versionLink.action = #selector(openUpdate)
+        versionLink.setContentHuggingPriority(.required, for: .horizontal)
+        showVersion()
+        let footer = NSStackView(views: [detachCheckbox, NSView(), versionLink, quitButton])
         footer.orientation = .horizontal; footer.alignment = .centerY
+        footer.setCustomSpacing(14, after: versionLink)
         // Tab order: Work → Rest → Start/Stop → Quit → Work
         workField.nextKeyView = restField
         restField.nextKeyView = runButton
@@ -522,6 +531,61 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     }
 
     @objc func quit() { NSApp.terminate(nil) }
+
+    // MARK: Version and update check
+    static let repo = "Interstellar0verdrive/Siesta"
+    var currentVersion: String {
+        if let i = CommandLine.arguments.firstIndex(of: "--version-override"), i + 1 < CommandLine.arguments.count {
+            return CommandLine.arguments[i + 1]      // hidden switch for testing the update path
+        }
+        return Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+    }
+
+    func showVersion() {
+        updateURL = nil
+        versionLink.attributedTitle = NSAttributedString(string: "v\(currentVersion)", attributes: [
+            .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.tertiaryLabelColor])
+        versionLink.isEnabled = false
+        versionLink.toolTip = nil
+    }
+
+    func showUpdate(version: String, url: URL) {
+        updateURL = url
+        versionLink.attributedTitle = NSAttributedString(string: "Update to \(version)", attributes: [
+            .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.labelColor,
+            .underlineStyle: NSUnderlineStyle.single.rawValue])
+        versionLink.isEnabled = true
+        versionLink.toolTip = "Open the release page"
+    }
+
+    @objc func openUpdate() { if let url = updateURL { NSWorkspace.shared.open(url) } }
+
+    /// Compares dotted version strings numerically: 1.10.0 > 1.9.2.
+    func isNewer(_ a: String, than b: String) -> Bool {
+        let pa = a.split(separator: ".").map { Int($0) ?? 0 }, pb = b.split(separator: ".").map { Int($0) ?? 0 }
+        for i in 0..<max(pa.count, pb.count) {
+            let x = i < pa.count ? pa[i] : 0, y = i < pb.count ? pb[i] : 0
+            if x != y { return x > y }
+        }
+        return false
+    }
+
+    func checkForUpdate() {
+        guard let url = URL(string: "https://api.github.com/repos/\(App.repo)/releases/latest") else { return }
+        var req = URLRequest(url: url, timeoutInterval: 15)
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
+            guard let self = self, let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let tag = json["tag_name"] as? String,
+                  let page = (json["html_url"] as? String).flatMap(URL.init(string:)) else { return }
+            let latest = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
+            DispatchQueue.main.async {
+                if self.isNewer(latest, than: self.currentVersion) { self.showUpdate(version: latest, url: page) }
+                else { self.showVersion() }
+            }
+        }.resume()
+    }
 
     @objc func toggleRun() {
         panelController.view.window?.makeFirstResponder(nil)

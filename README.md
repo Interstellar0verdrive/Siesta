@@ -26,6 +26,10 @@ Grab `Siesta-<version>.zip` from the [Releases](https://github.com/Interstellar0
 
 Siesta is signed ad hoc, not notarized, so macOS will refuse to open it the first time. Try to open it once, then go to System Settings → Privacy & Security, scroll down to the message about Siesta and click **Open Anyway**. On older macOS versions a right-click → Open on the app is enough. This is only needed once.
 
+## Updates
+
+The current version is shown in small print next to the Quit button. At launch and every six hours Siesta asks GitHub for the latest release; when a newer one exists the version turns into an "Update to x.y.z" link that opens the release page. Nothing is downloaded or installed automatically.
+
 ## Building
 
 Only the Xcode Command Line Tools are needed:
