@@ -12,7 +12,11 @@ Siesta counts the minutes the encoder has **actually** been working, then pauses
 
 Currently it watches **HandBrake**. The code is structured so other encoders (Tdarr, Topaz Video AI, plain ffmpeg…) can be added as profiles.
 
-![Illustration of Siesta in the macOS menu bar: HandBrake is working, with 12 minutes until the next pause and 18 of 30 work minutes elapsed](Resources/siesta-hero.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="Resources/siesta-hero-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="Resources/siesta-hero-light.png">
+  <img src="Resources/siesta-hero-dark.png" alt="Illustration of Siesta in the macOS menu bar: HandBrake is working, with 12 minutes until the next pause and 18 of 30 work minutes elapsed">
+</picture>
 
 ## How it works
 
