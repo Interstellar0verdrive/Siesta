@@ -197,6 +197,9 @@ final class FlatButton: NSButton {
         }
     }
     override var isHighlighted: Bool { didSet { needsDisplay = true } }
+    // keyboard focus must be visible on a custom-drawn button
+    override var focusRingMaskBounds: NSRect { bounds }
+    override func drawFocusRingMask() { NSBezierPath(roundedRect: bounds, xRadius: 8, yRadius: 8).fill() }
 }
 
 final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
