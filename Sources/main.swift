@@ -59,7 +59,7 @@ final class LogHeaderView: NSView {
 
     var expanded = false {
         didSet {
-            chevron.image = NSImage(systemSymbolName: expanded ? "chevron.down" : "chevron.right",
+            chevron.image = NSImage(systemSymbolName: expanded ? "chevron.up" : "chevron.down",
                                     accessibilityDescription: expanded ? "Collapse activity log" : "Expand activity log")
         }
     }
@@ -279,7 +279,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         column.setCustomSpacing(23, after: grid)
         column.setCustomSpacing(19, after: actions)
         column.setCustomSpacing(10, after: activityHeader)
-        column.setCustomSpacing(16, after: logScroll)
+        column.setCustomSpacing(19, after: logScroll)
         column.edgeInsets = NSEdgeInsets(top: 22, left: 24, bottom: 20, right: 24)
         column.translatesAutoresizingMaskIntoConstraints = false
         let background = BackgroundView()
@@ -304,6 +304,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     func layoutPanel() {
         logScroll.isHidden = !logExpanded
         activityHeader.expanded = logExpanded
+        // same gap above and below the accordion when it is closed; tighter to the list when open
+        if let column = activityHeader.superview as? NSStackView { column.setCustomSpacing(logExpanded ? 10 : 19, after: activityHeader) }
         activityHeader.count.stringValue = logCount == 0 ? "no events yet" : "\(logCount) event\(logCount == 1 ? "" : "s")"
         panelWidth.constant = detached ? windowWidth : popoverWidth
         let size = panelController.view.fittingSize
