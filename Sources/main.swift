@@ -71,26 +71,41 @@ final class LogHeaderView: NSView {
     override func mouseDown(with event: NSEvent) { onClick?() }
 }
 
-/// Secondary button with a subtle fill and border, as in the prototype footer.
-final class SecondaryButton: NSButton {
-    override init(frame: NSRect) {
-        super.init(frame: frame)
+/// Flat button in the prototype style: rounded 8 pt, thin border, generous padding.
+/// Primary = accent fill with white text; secondary = subtle fill with label text.
+final class FlatButton: NSButton {
+    let primary: Bool
+    init(title: String, primary: Bool) {
+        self.primary = primary
+        super.init(frame: .zero)
+        self.title = title
         isBordered = false
         wantsLayer = true
-        layer?.cornerRadius = 7
+        layer?.cornerRadius = 8
         layer?.borderWidth = 1
-        font = .systemFont(ofSize: 12, weight: .medium)
+        font = .systemFont(ofSize: primary ? 14 : 12, weight: .medium)
         setContentHuggingPriority(.required, for: .horizontal)
+        updateTitleColor()
     }
     required init?(coder: NSCoder) { fatalError() }
+    func updateTitleColor() {
+        attributedTitle = NSAttributedString(string: title, attributes: [
+            .font: font!, .foregroundColor: primary ? NSColor.white : NSColor.labelColor])
+    }
+    override var title: String { didSet { if wantsLayer { updateTitleColor() } } }
     override var intrinsicContentSize: NSSize {
         let s = super.intrinsicContentSize
-        return NSSize(width: s.width + 24, height: 30)
+        return NSSize(width: s.width + (primary ? 28 : 24), height: primary ? 34 : 30)
     }
     override var wantsUpdateLayer: Bool { true }
     override func updateLayer() {
-        layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.14 : 0.08).cgColor
-        layer?.borderColor = NSColor.labelColor.withAlphaComponent(0.16).cgColor
+        if primary {
+            layer?.backgroundColor = (isHighlighted ? NSColor.controlAccentColor.blended(withFraction: 0.2, of: .black) : NSColor.controlAccentColor)?.cgColor
+            layer?.borderColor = NSColor.white.withAlphaComponent(0.12).cgColor
+        } else {
+            layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.14 : 0.08).cgColor
+            layer?.borderColor = NSColor.labelColor.withAlphaComponent(0.16).cgColor
+        }
     }
     override var isHighlighted: Bool { didSet { needsDisplay = true } }
 }
@@ -113,7 +128,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     let progressDetail = NSTextField(labelWithString: "")
     let workField = NSTextField()
     let restField = NSTextField()
-    let runButton = NSButton(title: "Start cycle", target: nil, action: nil)
+    let runButton = FlatButton(title: "Start cycle", primary: true)
     let detachCheckbox = NSButton(checkboxWithTitle: "Detached window", target: nil, action: nil)
     let activityHeader = LogHeaderView()
     let logScroll = NSScrollView()
@@ -239,10 +254,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
         // Actions: primary run button, detach checkbox on the right
         runButton.target = self; runButton.action = #selector(toggleRun)
-        runButton.bezelStyle = .rounded; runButton.keyEquivalent = "\r"
-        runButton.controlSize = .large
+        runButton.keyEquivalent = "\r"
         detachCheckbox.target = self; detachCheckbox.action = #selector(toggleDetached)
-        let actions = NSStackView(views: [runButton, NSView(), detachCheckbox])
+        let actions = NSStackView(views: [runButton, NSView()])
         actions.orientation = .horizontal; actions.alignment = .centerY; actions.spacing = 12
 
         // Activity log: fully clickable header with chevron, collapsible list
@@ -264,12 +278,11 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         logScroll.documentView = logView
 
         // Footer: secondary quit button, right aligned
-        let quitButton = SecondaryButton(frame: .zero)
-        quitButton.title = "Quit Siesta"
+        let quitButton = FlatButton(title: "Quit Siesta", primary: false)
         quitButton.target = self; quitButton.action = #selector(quit)
         quitButton.setAccessibilityLabel("Quit Siesta")
-        let footer = NSStackView(views: [NSView(), quitButton])
-        footer.orientation = .horizontal
+        let footer = NSStackView(views: [detachCheckbox, NSView(), quitButton])
+        footer.orientation = .horizontal; footer.alignment = .centerY
 
         let column = NSStackView(views: [statusRow, progressWrap, divider(), grid, actions, divider(), activityHeader, logScroll, footer])
         column.orientation = .vertical
