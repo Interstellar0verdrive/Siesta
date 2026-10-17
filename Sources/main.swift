@@ -71,6 +71,30 @@ final class LogHeaderView: NSView {
     override func mouseDown(with event: NSEvent) { onClick?() }
 }
 
+/// Secondary button with a subtle fill and border, as in the prototype footer.
+final class SecondaryButton: NSButton {
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        isBordered = false
+        wantsLayer = true
+        layer?.cornerRadius = 7
+        layer?.borderWidth = 1
+        font = .systemFont(ofSize: 12, weight: .medium)
+        setContentHuggingPriority(.required, for: .horizontal)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override var intrinsicContentSize: NSSize {
+        let s = super.intrinsicContentSize
+        return NSSize(width: s.width + 24, height: 30)
+    }
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {
+        layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.14 : 0.08).cgColor
+        layer?.borderColor = NSColor.labelColor.withAlphaComponent(0.16).cgColor
+    }
+    override var isHighlighted: Bool { didSet { needsDisplay = true } }
+}
+
 final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     // MARK: UI
     var statusItem: NSStatusItem!
@@ -111,6 +135,14 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     var workMinutes: Double { max(1, Double(workField.integerValue)) }
     var restMinutes: Double { max(1, Double(restField.integerValue)) }
     var detached: Bool { defaults.bool(forKey: "window") }
+
+    static let standbyIcon: NSImage? = {
+        guard let url = Bundle.main.url(forResource: "SiestaStandby", withExtension: "pdf"),
+              let img = NSImage(contentsOf: url) else { return nil }
+        img.isTemplate = true
+        img.accessibilityDescription = "Siesta in standby"
+        return img
+    }()
 
     static let inactiveIcon: NSImage? = {
         let img = NSImage(named: "SiestaInactive")
@@ -155,8 +187,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         // Status row: symbol, title + subtitle, big countdown on the right
         statusSymbol.imageScaling = .scaleProportionallyUpOrDown
         statusSymbol.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 26, weight: .regular)
-        statusSymbol.widthAnchor.constraint(equalToConstant: 31).isActive = true
-        statusSymbol.heightAnchor.constraint(equalToConstant: 31).isActive = true
+        statusSymbol.widthAnchor.constraint(equalToConstant: 34).isActive = true
+        statusSymbol.heightAnchor.constraint(equalToConstant: 34).isActive = true
         statusTitle.font = .systemFont(ofSize: 16, weight: .medium)
         statusSubtitle.font = .systemFont(ofSize: 13)
         statusSubtitle.textColor = .secondaryLabelColor
@@ -232,8 +264,10 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         logScroll.documentView = logView
 
         // Footer: secondary quit button, right aligned
-        let quitButton = NSButton(title: "Quit Siesta", target: self, action: #selector(quit))
-        quitButton.bezelStyle = .rounded
+        let quitButton = SecondaryButton(frame: .zero)
+        quitButton.title = "Quit Siesta"
+        quitButton.target = self; quitButton.action = #selector(quit)
+        quitButton.setAccessibilityLabel("Quit Siesta")
         let footer = NSStackView(views: [NSView(), quitButton])
         footer.orientation = .horizontal
 
@@ -251,6 +285,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let background = BackgroundView()
         background.addSubview(column)
         panelWidth = background.widthAnchor.constraint(equalToConstant: popoverWidth)
+        panelWidth.priority = NSLayoutConstraint.Priority(999)
         NSLayoutConstraint.activate([
             column.topAnchor.constraint(equalTo: background.topAnchor),
             column.leadingAnchor.constraint(equalTo: background.leadingAnchor),
@@ -273,7 +308,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         panelController.view.frame = NSRect(origin: .zero, size: size)
         if detached, let w = window, w.contentViewController === panelController {
             w.setContentSize(size)
-        } else if popover.isShown {
+        } else {
             popover.contentSize = size
         }
     }
@@ -453,8 +488,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         activityHeader.count.stringValue = "\(logCount) event\(logCount == 1 ? "" : "s")"
     }
 
-    func setStatus(symbol: NSImage?, title: String, subtitle: String, count: String, tooltip: String, barTitle: String) {
-        statusSymbol.image = symbol
+    func setStatus(symbol: NSImage?, panelSymbol: NSImage? = nil, title: String, subtitle: String, count: String, tooltip: String, barTitle: String) {
+        statusSymbol.image = panelSymbol ?? symbol
+        statusSymbol.contentTintColor = panelSymbol == nil ? nil : NSColor.labelColor.withAlphaComponent(0.82)
         statusTitle.stringValue = title
         statusSubtitle.stringValue = subtitle
         countdown.stringValue = count
@@ -469,10 +505,14 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
     func refresh() {
         let f = DateFormatter(); f.dateFormat = "HH:mm"
-        progressWrap.isHidden = phase == .stopped
+        let hideProgress = phase == .stopped
+        if progressWrap.isHidden != hideProgress {
+            progressWrap.isHidden = hideProgress
+            layoutPanel()          // the panel height changed
+        }
         switch phase {
         case .stopped:
-            setStatus(symbol: App.inactiveIcon, title: "Cycle stopped",
+            setStatus(symbol: App.inactiveIcon, panelSymbol: App.standbyIcon, title: "Cycle stopped",
                       subtitle: "\(target.name) is not managed by Siesta", count: "—",
                       tooltip: "inactive", barTitle: "")
             runButton.title = "Start cycle"
