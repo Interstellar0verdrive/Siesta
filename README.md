@@ -42,7 +42,9 @@ xattr -d com.apple.quarantine /Applications/Siesta.app
 
 ## Updates
 
-The current version is shown in small print next to the Quit button. While Siesta is running it asks GitHub for the latest release at launch and then every six hours; when a newer one exists the version turns into an "Update to x.y.z" link that opens the release page. Nothing runs while the app is closed, and nothing is downloaded or installed automatically.
+The current version is shown in small print next to the Quit button. While Siesta is running it asks GitHub for the latest release at launch and then every six hours; nothing runs while the app is closed.
+
+When a newer release exists the version turns into an **Update to x.y.z** link. Clicking it downloads the release archive, verifies its SHA-256 checksum against the one published with the release, replaces the app in place (the old copy goes to the Trash) and relaunches. Because the new bundle is written by Siesta itself it carries no quarantine flag, so macOS does not ask for approval again: only the very first installation needs it. If the app lives in a folder Siesta cannot write to, or anything goes wrong, the link simply opens the release page instead.
 
 ## Building
 
