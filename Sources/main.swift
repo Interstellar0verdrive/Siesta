@@ -350,7 +350,6 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
         // Big run button filling the right half, as tall as the two rows
         runButton.target = self; runButton.action = #selector(toggleRun)
-        runButton.keyEquivalent = "\r"
         runButton.font = .systemFont(ofSize: 15, weight: .medium)
         runButton.updateTitleColor()
         runButton.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -502,6 +501,15 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             log("Cycle stopped")
         }
         refresh()
+    }
+
+    /// Return commits the field and drops focus; it must never reach the run button.
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        if selector == #selector(NSResponder.insertNewline(_:)) {
+            control.window?.makeFirstResponder(nil)
+            return true
+        }
+        return false
     }
 
     func controlTextDidChange(_ n: Notification) {
