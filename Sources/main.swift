@@ -17,8 +17,8 @@ struct Target {
 
 let target = Target(name: "HandBrake", bundleMarker: "HandBrake.app/", workerMarker: "XPCServices")
 
-let popoverWidth: CGFloat = 430
-let windowWidth: CGFloat = 570
+let popoverWidth: CGFloat = 350
+let windowWidth: CGFloat = 490
 
 /// Panel background: a click on empty space drops focus from a text field and commits its value.
 final class BackgroundView: NSView {
@@ -427,11 +427,13 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         column.setCustomSpacing(19, after: progressWrap)
         column.edgeInsets = NSEdgeInsets(top: 22, left: 24, bottom: 20, right: 24)
         column.translatesAutoresizingMaskIntoConstraints = false
-        // the column does not stretch a stack with intrinsic width by itself: pin it to the edges
-        NSLayoutConstraint.activate([
-            settings.leadingAnchor.constraint(equalTo: column.leadingAnchor, constant: 24),
-            settings.trailingAnchor.constraint(equalTo: column.trailingAnchor, constant: -24),
-        ])
+        // the column does not reliably stretch children with an intrinsic width: pin every row to the edges
+        for row in [statusRow, progressWrap, settings, logBox, footer] as [NSView] {
+            NSLayoutConstraint.activate([
+                row.leadingAnchor.constraint(equalTo: column.leadingAnchor, constant: 24),
+                row.trailingAnchor.constraint(equalTo: column.trailingAnchor, constant: -24),
+            ])
+        }
 
         let background = BackgroundView()
         background.addSubview(column)
@@ -485,6 +487,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                 w.title = "Siesta"
                 w.isReleasedWhenClosed = false
                 w.autorecalculatesKeyViewLoop = false
+                w.level = .floating          // stays visible above other apps' windows
                 window = w
             }
             window!.contentViewController = panelController
