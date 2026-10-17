@@ -300,9 +300,35 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         logView.scrollToEndOfDocument(nil)
     }
 
+    /// A sleeping cat face drawn as a template image: SF Symbols has no cat face.
+    static let catFace: NSImage = {
+        let img = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+            let head = NSBezierPath()
+            // head
+            head.appendOval(in: NSRect(x: 2, y: 1, width: 14, height: 12.5))
+            // ears: narrow triangles rising from the top of the head
+            head.move(to: NSPoint(x: 3.6, y: 10)); head.line(to: NSPoint(x: 3.4, y: 16)); head.line(to: NSPoint(x: 8, y: 13.2)); head.close()
+            head.move(to: NSPoint(x: 14.4, y: 10)); head.line(to: NSPoint(x: 14.6, y: 16)); head.line(to: NSPoint(x: 10, y: 13.2)); head.close()
+            NSColor.black.setFill(); head.fill()
+            // closed eyes and a small nose, cut out of the silhouette
+            NSGraphicsContext.current?.compositingOperation = .destinationOut
+            let eyes = NSBezierPath(); eyes.lineWidth = 1.05; eyes.lineCapStyle = .round
+            eyes.appendArc(withCenter: NSPoint(x: 6.1, y: 9.2), radius: 1.5, startAngle: 215, endAngle: 325)
+            eyes.appendArc(withCenter: NSPoint(x: 11.9, y: 9.2), radius: 1.5, startAngle: 215, endAngle: 325)
+            NSColor.black.setStroke(); eyes.stroke()
+            let nose = NSBezierPath(); nose.move(to: NSPoint(x: 8.35, y: 6.3)); nose.line(to: NSPoint(x: 9.65, y: 6.3)); nose.line(to: NSPoint(x: 9, y: 5.4)); nose.close()
+            nose.fill()
+            return true
+        }
+        img.isTemplate = true
+        return img
+    }()
+
     func setStatusItem(symbol: String, fallback: String, title: String, tooltip: String) {
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: tooltip)
-            ?? NSImage(systemSymbolName: fallback, accessibilityDescription: tooltip)
+        let image = symbol == "cat.face"
+            ? App.catFace
+            : (NSImage(systemSymbolName: symbol, accessibilityDescription: tooltip)
+               ?? NSImage(systemSymbolName: fallback, accessibilityDescription: tooltip))
         statusItem.button?.image = image
         statusItem.button?.title = title.isEmpty ? "" : " " + title
         statusItem.button?.toolTip = "Siesta — " + tooltip
@@ -312,7 +338,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let f = DateFormatter(); f.dateFormat = "HH:mm"
         switch phase {
         case .stopped:
-            setStatusItem(symbol: "cat.circle.fill", fallback: "cat.fill", title: "", tooltip: "stopped")
+            setStatusItem(symbol: "cat.face", fallback: "cat.fill", title: "", tooltip: "stopped")
             statusLabel.stringValue = "Stopped"
             startButton.title = "Start"
         case .working:
