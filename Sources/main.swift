@@ -608,8 +608,25 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.labelColor,
             .underlineStyle: NSUnderlineStyle.single.rawValue])
         versionLink.isEnabled = true
-        versionLink.toolTip = "Open the release page"
+        versionLink.toolTip = canSelfUpdate && updateZip != nil
+            ? "Download and install Siesta \(version) in place, then relaunch"
+            : "Open the release page"
         versionLink.window?.invalidateCursorRects(for: versionLink)
+    }
+
+    /// Mentions a new release once per version: the footer link alone is easy to miss.
+    func announceUpdate(_ version: String) {
+        guard defaults.string(forKey: "announced") != version else { return }
+        defaults.set(version, forKey: "announced")
+        let alert = NSAlert()
+        alert.messageText = "Siesta \(version) is available"
+        alert.informativeText = canSelfUpdate && updateZip != nil
+            ? "Click “Update to \(version)” next to the Quit button. Siesta downloads the new version, replaces itself and relaunches; macOS will not ask for approval again."
+            : "Click “Update to \(version)” next to the Quit button to open the release page."
+        alert.addButton(withTitle: canSelfUpdate && updateZip != nil ? "Update now" : "Open release page")
+        alert.addButton(withTitle: "Later")
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn { openUpdate() }
     }
 
     @objc func openUpdate() {
@@ -642,7 +659,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         guard let zipURL = updateZip, let shaURL = updateSha, !updating else { return }
         updating = true
         versionLink.isEnabled = false
-        updateStatus("Downloading…")
+        updateStatus("Updating…")
         log("Downloading Siesta \(updateVersion)")
         // 1) expected hash
         URLSession.shared.dataTask(with: shaURL) { [weak self] data, _, _ in
@@ -663,17 +680,11 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                 }
                 DispatchQueue.main.async { self.install(zipData: zipData) }
             }
-            var obs: NSKeyValueObservation? = nil
-            obs = task.progress.observe(\.fractionCompleted) { p, _ in
-                DispatchQueue.main.async { self.updateStatus("Downloading \(Int(p.fractionCompleted * 100))%") }
-                if p.fractionCompleted >= 1 { obs?.invalidate() }
-            }
             task.resume()
         }.resume()
     }
 
     func install(zipData: Data) {
-        updateStatus("Installing…")
         let fm = FileManager.default
         let work = fm.temporaryDirectory.appendingPathComponent("siesta-update-\(UUID().uuidString)")
         let zip = work.appendingPathComponent("update.zip")
@@ -740,6 +751,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                 if self.isNewer(latest, than: self.currentVersion) {
                     self.updateZip = zip; self.updateSha = sha; self.updateVersion = latest
                     self.showUpdate(version: latest, url: page)
+                    self.announceUpdate(latest)
                 } else { self.showVersion() }
             }
         }.resume()
