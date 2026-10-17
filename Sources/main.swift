@@ -294,6 +294,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
         rescueFrozen()
         installSignalHandlers()
+        installPopoverGlide()
         checkForUpdate()
         Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in self?.checkForUpdate() }
         refresh()
@@ -510,7 +511,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             guard let button = statusItem.button else { return }
             NSApp.activate(ignoringOtherApps: true)
             // anchor the arrow to the icon, not to the whole icon + countdown button
+            lastPopoverFrame = .zero
             popover.show(relativeTo: iconAnchor(), of: button, preferredEdge: .minY)
+            lastPopoverFrame = popoverWindow?.frame ?? .zero
             DispatchQueue.main.async { [weak self] in
                 self?.panelController.view.window?.autorecalculatesKeyViewLoop = false
                 self?.panelController.view.window?.makeFirstResponder(nil)
@@ -525,6 +528,35 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         guard let image = button.image, !button.title.isEmpty else { return button.bounds }
         let inset = (button.bounds.width - image.size.width - button.attributedTitle.size().width) / 2
         return NSRect(x: 0, y: 0, width: image.size.width + 2 * max(0, inset), height: button.bounds.height)
+    }
+
+    // MARK: Smooth popover follow
+    // AppKit snaps the popover to the status item whenever the item moves (our countdown
+    // changing width, other apps' items resizing). Catch the snap and glide instead.
+    var popoverWindow: NSWindow? { popover.contentViewController?.view.window }
+    var lastPopoverFrame: NSRect = .zero
+    var glidingPopover = false
+
+    func installPopoverGlide() {
+        NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: nil, queue: .main) { [weak self] n in
+            guard let self = self, let w = n.object as? NSWindow, w === self.popoverWindow, self.popover.isShown, !self.glidingPopover else { return }
+            let target = w.frame
+            let from = self.lastPopoverFrame
+            // first placement, vertical moves or tiny shifts: just remember the frame
+            guard from != .zero, from.size == target.size, abs(from.minY - target.minY) < 1, abs(from.minX - target.minX) >= 2 else {
+                self.lastPopoverFrame = target; return
+            }
+            self.glidingPopover = true
+            w.setFrame(from, display: false)
+            NSAnimationContext.runAnimationGroup({ ctx in
+                ctx.duration = 0.25
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                w.animator().setFrame(target, display: true)
+            }, completionHandler: { [weak self] in
+                self?.lastPopoverFrame = target
+                self?.glidingPopover = false
+            })
+        }
     }
 
     @objc func toggleDetached() {
