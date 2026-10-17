@@ -44,7 +44,7 @@ final class LogBoxView: NSView {
     let title = NSTextField(labelWithString: "Activity log")
     let count = NSTextField(labelWithString: "")
     let dot = NSTextField(labelWithString: "·")
-    let clear = NSButton(title: "Clear", target: nil, action: nil)
+    let clear = LinkButton(title: "Clear", target: nil, action: nil)
     let scroll = NSScrollView()
     let list = LogTextView()
     var onToggle: (() -> Void)?
@@ -165,6 +165,11 @@ final class NumberBox: NSView {
     }
 }
 
+/// Text link: hand cursor on hover, like a web link.
+final class LinkButton: NSButton {
+    override func resetCursorRects() { if isEnabled { addCursorRect(bounds, cursor: .pointingHand) } }
+}
+
 /// Flat button in the prototype style: rounded 8 pt, thin border, generous padding.
 /// Primary = accent fill with white text; secondary = subtle fill with label text.
 final class FlatButton: NSButton {
@@ -232,7 +237,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     let runButton = FlatButton(title: "Start cycle", primary: true)
     let detachCheckbox = NSButton(checkboxWithTitle: "Detached window", target: nil, action: nil)
     let logBox = LogBoxView()
-    let versionLink = NSButton(title: "", target: nil, action: nil)
+    let versionLink = LinkButton(title: "", target: nil, action: nil)
     var updateURL: URL?
     var logView: NSTextView { logBox.list }
     var logExpanded = false
@@ -560,6 +565,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.tertiaryLabelColor])
         versionLink.isEnabled = false
         versionLink.toolTip = nil
+        versionLink.window?.invalidateCursorRects(for: versionLink)
     }
 
     func showUpdate(version: String, url: URL) {
@@ -569,6 +575,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             .underlineStyle: NSUnderlineStyle.single.rawValue])
         versionLink.isEnabled = true
         versionLink.toolTip = "Open the release page"
+        versionLink.window?.invalidateCursorRects(for: versionLink)
     }
 
     @objc func openUpdate() { if let url = updateURL { NSWorkspace.shared.open(url) } }
@@ -621,6 +628,17 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         if selector == #selector(NSResponder.insertNewline(_:)) {
             control.window?.makeFirstResponder(nil)
+            return true
+        }
+        // ↑ / ↓ step by 1, with Shift by 10, within 1…1440 minutes
+        let up = selector == #selector(NSResponder.moveUp(_:)) || selector == #selector(NSResponder.moveUpAndModifySelection(_:))
+        let down = selector == #selector(NSResponder.moveDown(_:)) || selector == #selector(NSResponder.moveDownAndModifySelection(_:))
+        if up || down {
+            let step = NSEvent.modifierFlags.contains(.shift) ? 10 : 1
+            let current = Int(textView.string) ?? 1
+            let value = min(1440, max(1, current + (up ? step : -step)))
+            textView.string = String(value)
+            textView.selectAll(nil)
             return true
         }
         return false
