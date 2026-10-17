@@ -7,6 +7,6 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 swiftc -O -swift-version 5 -o "$APP/Contents/MacOS/Siesta" Sources/main.swift
 cp Resources/Info.plist "$APP/Contents/"
-cp Resources/Siesta.icns "$APP/Contents/Resources/"
+cp Resources/Siesta.icns Resources/SiestaInactive.png Resources/SiestaInactive@2x.png "$APP/Contents/Resources/"
 codesign --force --sign - "$APP"
 echo "Built: $APP"

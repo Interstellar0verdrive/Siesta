@@ -16,7 +16,9 @@ Currently it watches **HandBrake**. The code is structured so other encoders (Td
 - If HandBrake stays idle for at least the rest duration, the work counter resets: it already had its rest.
 - Stopping or quitting Siesta always resumes a frozen worker first.
 
-The menu bar item shows the current state with system symbols: a sleeping cat face when stopped, an hourglass while waiting for work, play with the minutes left until the next rest, pause with the minutes left until resume. Clicking it opens a popover; a checkbox switches to a detached window instead. Changing the minutes while Siesta is running takes effect immediately and is noted in the log.
+The menu bar item shows the current state with system symbols: a sleeping cat face when stopped, an hourglass while waiting for work, play with the minutes left until the next rest, pause with the minutes left until resume.
+
+Clicking it opens a popover with the current state and countdown, a thin progress line for the running interval, the Work and Rest minutes, the Start/Stop cycle button, a collapsible activity log and a Quit button. The "Detached window" checkbox moves the same panel into a regular window; unchecking it brings the popover back. Changing the minutes while Siesta is running takes effect immediately and is noted in the log. "Stop cycle" stops Siesta's cycle only, never the encoder.
 
 ## Building
 

@@ -17,25 +17,42 @@ struct Target {
 
 let target = Target(name: "HandBrake", bundleMarker: "HandBrake.app/", workerMarker: "XPCServices")
 
+let popoverWidth: CGFloat = 430
+let windowWidth: CGFloat = 570
+
 /// Panel background: a click on empty space drops focus from a text field and commits its value.
 final class BackgroundView: NSView {
     override func mouseDown(with event: NSEvent) { window?.makeFirstResponder(nil) }
 }
 
 final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
-    // UI
+    // MARK: UI
     var statusItem: NSStatusItem!
     let panelController = NSViewController()
     let popover = NSPopover()
     var window: NSWindow?
+    var panelWidth: NSLayoutConstraint!
+
+    let statusSymbol = NSImageView()
+    let statusTitle = NSTextField(labelWithString: "")
+    let statusSubtitle = NSTextField(labelWithString: "")
+    let countdown = NSTextField(labelWithString: "")
+    let progressWrap = NSStackView()
+    let progress = NSProgressIndicator()
+    let progressLabel = NSTextField(labelWithString: "")
+    let progressDetail = NSTextField(labelWithString: "")
     let workField = NSTextField()
     let restField = NSTextField()
-    let statusLabel = NSTextField(labelWithString: "Stopped")
-    let startButton = NSButton(title: "Start", target: nil, action: nil)
-    let windowCheckbox = NSButton(checkboxWithTitle: "Detached window", target: nil, action: nil)
+    let runButton = NSButton(title: "Start cycle", target: nil, action: nil)
+    let detachCheckbox = NSButton(checkboxWithTitle: "Detached window", target: nil, action: nil)
+    let activityToggle = NSButton(title: "", target: nil, action: nil)
+    let activityCount = NSTextField(labelWithString: "")
+    let logScroll = NSScrollView()
     let logView = NSTextView()
+    var logExpanded = false
+    var logCount = 0
 
-    // State
+    // MARK: State
     var timer: Timer?
     var phase: Phase = .stopped
     var lastTick = Date()
@@ -48,10 +65,21 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     var threshold: Double { defaults.object(forKey: "threshold") == nil ? 50.0 : defaults.double(forKey: "threshold") }
     var workMinutes: Double { max(1, Double(workField.integerValue)) }
     var restMinutes: Double { max(1, Double(restField.integerValue)) }
-    var detachedWindow: Bool { defaults.bool(forKey: "window") }
+    var detached: Bool { defaults.bool(forKey: "window") }
+
+    static let inactiveIcon: NSImage? = {
+        let img = NSImage(named: "SiestaInactive")
+        img?.isTemplate = true
+        img?.accessibilityDescription = "Siesta inactive"
+        return img
+    }()
 
     // MARK: Lifecycle
     func applicationDidFinishLaunching(_ n: Notification) {
+        // Hidden switch for checking both appearances: --appearance light|dark
+        if let i = CommandLine.arguments.firstIndex(of: "--appearance"), i + 1 < CommandLine.arguments.count {
+            NSApp.appearance = NSAppearance(named: CommandLine.arguments[i + 1] == "dark" ? .darkAqua : .aqua)
+        }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.target = self
         statusItem.button?.action = #selector(statusItemClicked)
@@ -60,95 +88,182 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let w = defaults.integer(forKey: "work"), r = defaults.integer(forKey: "rest")
         workField.integerValue = w == 0 ? 60 : w
         restField.integerValue = r == 0 ? 5 : r
-        windowCheckbox.state = detachedWindow ? .on : .off
+        detachCheckbox.state = detached ? .on : .off
+        logExpanded = detached
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
         refresh()
-        if CommandLine.arguments.contains("--start") { toggleStart() }
+        if CommandLine.arguments.contains("--start") { toggleRun() }
         // The status item must be laid out before a popover can attach to it.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.showPanel() }
     }
 
     func applicationWillTerminate(_ n: Notification) { resume() }
 
-    // MARK: Panel
+    // MARK: Panel construction
+    func divider() -> NSBox {
+        let b = NSBox(); b.boxType = .separator
+        b.translatesAutoresizingMaskIntoConstraints = false
+        return b
+    }
+
     func buildPanel() {
-        func row(_ text: String, _ field: NSTextField) -> NSStackView {
-            let label = NSTextField(labelWithString: text)
-            label.widthAnchor.constraint(equalToConstant: 130).isActive = true
-            field.widthAnchor.constraint(equalToConstant: 60).isActive = true
+        // Status row: symbol, title + subtitle, big countdown on the right
+        statusSymbol.imageScaling = .scaleProportionallyUpOrDown
+        statusSymbol.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 26, weight: .regular)
+        statusSymbol.widthAnchor.constraint(equalToConstant: 31).isActive = true
+        statusSymbol.heightAnchor.constraint(equalToConstant: 31).isActive = true
+        statusTitle.font = .systemFont(ofSize: 16, weight: .medium)
+        statusSubtitle.font = .systemFont(ofSize: 13)
+        statusSubtitle.textColor = .secondaryLabelColor
+        let titles = NSStackView(views: [statusTitle, statusSubtitle])
+        titles.orientation = .vertical; titles.alignment = .leading; titles.spacing = 2
+        countdown.font = .monospacedDigitSystemFont(ofSize: 21, weight: .medium)
+        countdown.alignment = .right
+        countdown.setContentHuggingPriority(.required, for: .horizontal)
+        let statusRow = NSStackView(views: [statusSymbol, titles, NSView(), countdown])
+        statusRow.orientation = .horizontal; statusRow.alignment = .centerY; statusRow.spacing = 13
+        statusRow.setCustomSpacing(16, after: titles)
+
+        // Thin progress line with caption
+        progress.style = .bar; progress.isIndeterminate = false
+        progress.minValue = 0; progress.maxValue = 1; progress.controlSize = .small
+        progressLabel.font = .systemFont(ofSize: 11); progressLabel.textColor = .secondaryLabelColor
+        progressDetail.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        progressDetail.textColor = .secondaryLabelColor
+        let caption = NSStackView(views: [progressLabel, NSView(), progressDetail])
+        caption.orientation = .horizontal; caption.spacing = 10
+        progressWrap.setViews([progress, caption], in: .top)
+        progressWrap.orientation = .vertical; progressWrap.alignment = .width; progressWrap.spacing = 4
+
+        // Settings grid: labels on the left, field + unit flush right
+        func numberField(_ field: NSTextField, _ label: String) -> NSView {
+            field.widthAnchor.constraint(equalToConstant: 72).isActive = true
             field.alignment = .right
+            field.font = .systemFont(ofSize: 15)
+            field.setAccessibilityLabel(label)
             let f = NumberFormatter(); f.minimum = 1; f.maximum = 1440; f.allowsFloats = false
             field.formatter = f
             field.delegate = self
-            let s = NSStackView(views: [label, field, NSTextField(labelWithString: "min")])
-            s.orientation = .horizontal; s.spacing = 8
+            let unit = NSTextField(labelWithString: "min")
+            unit.font = .systemFont(ofSize: 13); unit.textColor = .secondaryLabelColor
+            unit.alignment = .right
+            unit.widthAnchor.constraint(equalToConstant: 24).isActive = true
+            let s = NSStackView(views: [field, unit]); s.orientation = .horizontal; s.spacing = 9
             return s
         }
+        let workLabel = NSTextField(labelWithString: "Work"); workLabel.font = .systemFont(ofSize: 14)
+        let restLabel = NSTextField(labelWithString: "Rest"); restLabel.font = .systemFont(ofSize: 14)
+        let grid = NSGridView(views: [[workLabel, numberField(workField, "Work minutes")],
+                                      [restLabel, numberField(restField, "Rest minutes")]])
+        grid.rowSpacing = 13; grid.columnSpacing = 12
+        grid.column(at: 1).xPlacement = .trailing
+        grid.rowAlignment = .firstBaseline
+        grid.translatesAutoresizingMaskIntoConstraints = false
 
-        startButton.target = self; startButton.action = #selector(toggleStart)
-        startButton.bezelStyle = .rounded; startButton.keyEquivalent = "\r"
-        let quitButton = NSButton(title: "Quit", target: self, action: #selector(quit))
-        quitButton.bezelStyle = .rounded
-        windowCheckbox.target = self; windowCheckbox.action = #selector(toggleWindowMode)
-        let buttons = NSStackView(views: [startButton, quitButton, NSView(), windowCheckbox])
-        buttons.orientation = .horizontal; buttons.spacing = 8
-        buttons.widthAnchor.constraint(equalToConstant: 320).isActive = true
+        // Actions: primary run button, detach checkbox on the right
+        runButton.target = self; runButton.action = #selector(toggleRun)
+        runButton.bezelStyle = .rounded; runButton.keyEquivalent = "\r"
+        runButton.controlSize = .large
+        detachCheckbox.target = self; detachCheckbox.action = #selector(toggleDetached)
+        let actions = NSStackView(views: [runButton, NSView(), detachCheckbox])
+        actions.orientation = .horizontal; actions.alignment = .centerY; actions.spacing = 12
 
-        statusLabel.font = .boldSystemFont(ofSize: 13)
-
-        let scroll = NSScrollView()
-        scroll.hasVerticalScroller = true
-        scroll.borderType = .bezelBorder
-        scroll.widthAnchor.constraint(equalToConstant: 320).isActive = true
-        scroll.heightAnchor.constraint(equalToConstant: 120).isActive = true
+        // Activity log: fully clickable header with chevron, collapsible list
+        activityToggle.target = self; activityToggle.action = #selector(toggleLog)
+        activityToggle.bezelStyle = .texturedRounded
+        activityToggle.imagePosition = .imageLeading
+        activityToggle.alignment = .left
+        activityToggle.font = .systemFont(ofSize: 13, weight: .medium)
+        activityToggle.title = "Activity log"
+        activityToggle.heightAnchor.constraint(equalToConstant: 32).isActive = true
+        activityCount.font = .systemFont(ofSize: 11); activityCount.textColor = .secondaryLabelColor
+        activityCount.alignment = .right
+        activityToggle.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        activityToggle.addSubview(activityCount)
+        activityCount.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            activityCount.trailingAnchor.constraint(equalTo: activityToggle.trailingAnchor, constant: -12),
+            activityCount.centerYAnchor.constraint(equalTo: activityToggle.centerYAnchor),
+        ])
+        logScroll.hasVerticalScroller = true
+        logScroll.borderType = .noBorder
+        logScroll.drawsBackground = false
+        logScroll.heightAnchor.constraint(equalToConstant: 110).isActive = true
         logView.isEditable = false
-        logView.backgroundColor = .textBackgroundColor
-        logView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        logView.textColor = .secondaryLabelColor
-        logView.textContainerInset = NSSize(width: 4, height: 4)
+        logView.drawsBackground = false
+        logView.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        logView.textContainerInset = NSSize(width: 2, height: 6)
         logView.isVerticallyResizable = true
         logView.isHorizontallyResizable = false
         logView.autoresizingMask = [.width]
         logView.textContainer?.widthTracksTextView = true
         logView.minSize = NSSize(width: 0, height: 0)
         logView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        scroll.documentView = logView
+        logScroll.documentView = logView
 
-        let column = NSStackView(views: [row("Work minutes", workField),
-                                         row("Rest minutes", restField),
-                                         statusLabel, buttons, scroll])
+        // Footer: secondary quit button, right aligned
+        let quitButton = NSButton(title: "Quit Siesta", target: self, action: #selector(quit))
+        quitButton.bezelStyle = .rounded; quitButton.controlSize = .small
+        let footer = NSStackView(views: [NSView(), quitButton])
+        footer.orientation = .horizontal
+
+        let column = NSStackView(views: [statusRow, progressWrap, divider(), grid, actions, divider(), activityToggle, logScroll, footer])
         column.orientation = .vertical
-        column.alignment = .leading
-        column.distribution = .gravityAreas
-        column.spacing = 12
-        column.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
+        column.alignment = .width
+        column.spacing = 17
+        column.setCustomSpacing(19, after: progressWrap)
+        column.setCustomSpacing(23, after: grid)
+        column.setCustomSpacing(19, after: actions)
+        column.setCustomSpacing(8, after: activityToggle)
+        column.setCustomSpacing(12, after: logScroll)
+        column.edgeInsets = NSEdgeInsets(top: 22, left: 24, bottom: 15, right: 24)
         column.translatesAutoresizingMaskIntoConstraints = false
+        // NSStackView does not stretch a button on its own: pin it to the column edges.
+        NSLayoutConstraint.activate([
+            activityToggle.leadingAnchor.constraint(equalTo: column.leadingAnchor, constant: 24),
+            activityToggle.trailingAnchor.constraint(equalTo: column.trailingAnchor, constant: -24),
+        ])
 
         let background = BackgroundView()
         background.addSubview(column)
+        panelWidth = background.widthAnchor.constraint(equalToConstant: popoverWidth)
         NSLayoutConstraint.activate([
             column.topAnchor.constraint(equalTo: background.topAnchor),
             column.leadingAnchor.constraint(equalTo: background.leadingAnchor),
             column.trailingAnchor.constraint(equalTo: background.trailingAnchor),
             column.bottomAnchor.constraint(equalTo: background.bottomAnchor),
+            panelWidth,
         ])
-        background.widthAnchor.constraint(equalToConstant: 360).isActive = true
-        background.heightAnchor.constraint(equalToConstant: 300).isActive = true
-        background.frame = NSRect(x: 0, y: 0, width: 360, height: 300)
         panelController.view = background
         popover.behavior = .transient
         popover.animates = true
     }
 
+    /// Recomputes the panel size after a layout change (log toggled, mode switched).
+    func layoutPanel() {
+        logScroll.isHidden = !logExpanded
+        activityToggle.image = NSImage(systemSymbolName: logExpanded ? "chevron.down" : "chevron.right",
+                                       accessibilityDescription: logExpanded ? "Collapse" : "Expand")
+        activityCount.stringValue = logCount == 0 ? "no events yet" : "\(logCount) event\(logCount == 1 ? "" : "s")"
+        panelWidth.constant = detached ? windowWidth : popoverWidth
+        let size = panelController.view.fittingSize
+        panelController.view.frame = NSRect(origin: .zero, size: size)
+        if detached, let w = window, w.contentViewController === panelController {
+            w.setContentSize(size)
+        } else if popover.isShown {
+            popover.contentSize = size
+        }
+    }
+
     // MARK: Popover / window
     @objc func statusItemClicked() {
-        if detachedWindow { showPanel() }
+        if detached { showPanel() }
         else if popover.isShown { popover.performClose(nil) }
         else { showPanel() }
     }
 
     func showPanel() {
-        if detachedWindow {
+        if detached {
             if popover.isShown { popover.performClose(nil) }
             popover.contentViewController = nil
             if window == nil {
@@ -158,7 +273,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                 window = w
             }
             window!.contentViewController = panelController
-            window!.setContentSize(NSSize(width: 360, height: 300))
+            layoutPanel()
             if !window!.isVisible { window!.center() }
             NSApp.activate(ignoringOtherApps: true)
             window!.makeKeyAndOrderFront(nil)
@@ -166,21 +281,30 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             window?.orderOut(nil)
             window?.contentViewController = nil
             popover.contentViewController = panelController
-            popover.contentSize = NSSize(width: 360, height: 300)
+            layoutPanel()
+            popover.contentSize = panelController.view.fittingSize
             guard let button = statusItem.button else { return }
             NSApp.activate(ignoringOtherApps: true)
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         }
     }
 
-    @objc func toggleWindowMode() {
-        defaults.set(windowCheckbox.state == .on, forKey: "window")
+    @objc func toggleDetached() {
+        let on = detachCheckbox.state == .on
+        defaults.set(on, forKey: "window")
+        logExpanded = on          // the prototype opens the log in the window, closes it in the popover
         showPanel()
+    }
+
+    @objc func toggleLog() {
+        logExpanded.toggle()
+        layoutPanel()
+        if logExpanded { logView.scrollToEndOfDocument(nil) }
     }
 
     @objc func quit() { NSApp.terminate(nil) }
 
-    @objc func toggleStart() {
+    @objc func toggleRun() {
         panelController.view.window?.makeFirstResponder(nil)
         if phase == .stopped {
             defaults.set(workField.integerValue, forKey: "work")
@@ -188,11 +312,11 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             phase = .working
             workSeconds = 0; idleSeconds = 0; isEncoding = false
             lastTick = Date()
-            log("Started: \(Int(workMinutes)) min work, \(Int(restMinutes)) min rest")
+            log("Cycle started · \(Int(workMinutes)) min work, \(Int(restMinutes)) min rest")
         } else {
             resume()
             phase = .stopped
-            log("Stopped")
+            log("Cycle stopped")
         }
         refresh()
     }
@@ -200,13 +324,13 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     func controlTextDidEndEditing(_ n: Notification) {
         guard let field = n.object as? NSTextField else { return }
         let key = field === workField ? "work" : "rest"
-        let name = field === workField ? "Work minutes" : "Rest minutes"
+        let name = field === workField ? "Work" : "Rest"
         let old = defaults.integer(forKey: key)
         let new = max(1, field.integerValue)
         field.integerValue = new
         if new != old {
             defaults.set(new, forKey: key)
-            log("\(name): \(old) → \(new)")
+            log("\(name) interval changed to \(new) min")
             refresh()
         }
     }
@@ -259,7 +383,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             if encoding != isEncoding {
                 isEncoding = encoding
                 log(encoding ? "\(target.name) is encoding" :
-                    (procs.isEmpty ? "\(target.name) is not running" : "\(target.name) is idle (CPU \(Int(totalCpu))%)"))
+                    (procs.isEmpty ? "\(target.name) is not running" : "\(target.name) is idle · CPU \(Int(totalCpu))%"))
             }
             if encoding {
                 workSeconds += dt; idleSeconds = 0
@@ -271,13 +395,13 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                     frozenPids = toFreeze.map { $0.pid }
                     phase = .resting
                     restStart = now
-                    log("CPU \(Int(totalCpu))%: resting for \(Int(restMinutes)) min")
+                    log("\(target.name) paused · CPU \(Int(totalCpu))%")
                 }
             } else {
                 idleSeconds += dt
                 if workSeconds > 0 && idleSeconds >= restMinutes * 60 {
                     workSeconds = 0
-                    log("Idle for \(Int(restMinutes)) min: work counter reset")
+                    log("Idle for \(Int(restMinutes)) min · work counter reset")
                 }
             }
         case .resting:
@@ -285,7 +409,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                 resume()
                 phase = .working
                 workSeconds = 0; idleSeconds = 0
-                log("Resumed")
+                log("\(target.name) resumed")
             }
         }
         refresh()
@@ -293,73 +417,70 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
     func log(_ s: String) {
         let f = DateFormatter(); f.dateFormat = "HH:mm"
-        let line = "\(f.string(from: Date()))  \(s)\n"
-        logView.textStorage?.append(NSAttributedString(string: line, attributes: [
-            .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
-            .foregroundColor: NSColor.secondaryLabelColor]))
+        let para = NSMutableParagraphStyle()
+        para.tabStops = [NSTextTab(textAlignment: .left, location: 46)]
+        para.headIndent = 46; para.paragraphSpacing = 4
+        let line = NSMutableAttributedString(string: "\(f.string(from: Date()))\t\(s)\n", attributes: [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular),
+            .foregroundColor: NSColor.labelColor, .paragraphStyle: para])
+        line.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: NSRange(location: 0, length: 5))
+        logView.textStorage?.append(line)
         logView.scrollToEndOfDocument(nil)
+        logCount += 1
+        activityCount.stringValue = "\(logCount) event\(logCount == 1 ? "" : "s")"
     }
 
-    /// A sleeping cat face drawn as a template image: SF Symbols has no cat face.
-    static let catFace: NSImage = {
-        let img = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
-            let head = NSBezierPath()
-            // head
-            head.appendOval(in: NSRect(x: 2, y: 1, width: 14, height: 12.5))
-            // ears: narrow triangles rising from the top of the head
-            head.move(to: NSPoint(x: 3.6, y: 10)); head.line(to: NSPoint(x: 3.4, y: 16)); head.line(to: NSPoint(x: 8, y: 13.2)); head.close()
-            head.move(to: NSPoint(x: 14.4, y: 10)); head.line(to: NSPoint(x: 14.6, y: 16)); head.line(to: NSPoint(x: 10, y: 13.2)); head.close()
-            NSColor.black.setFill(); head.fill()
-            // closed eyes and a small nose, cut out of the silhouette
-            NSGraphicsContext.current?.compositingOperation = .destinationOut
-            let eyes = NSBezierPath(); eyes.lineWidth = 1.05; eyes.lineCapStyle = .round
-            eyes.appendArc(withCenter: NSPoint(x: 6.1, y: 9.2), radius: 1.5, startAngle: 215, endAngle: 325)
-            eyes.appendArc(withCenter: NSPoint(x: 11.9, y: 9.2), radius: 1.5, startAngle: 215, endAngle: 325)
-            NSColor.black.setStroke(); eyes.stroke()
-            let nose = NSBezierPath(); nose.move(to: NSPoint(x: 8.35, y: 6.3)); nose.line(to: NSPoint(x: 9.65, y: 6.3)); nose.line(to: NSPoint(x: 9, y: 5.4)); nose.close()
-            nose.fill()
-            return true
-        }
-        img.isTemplate = true
-        return img
-    }()
-
-    func setStatusItem(symbol: String, fallback: String, title: String, tooltip: String) {
-        let image = symbol == "cat.face"
-            ? App.catFace
-            : (NSImage(systemSymbolName: symbol, accessibilityDescription: tooltip)
-               ?? NSImage(systemSymbolName: fallback, accessibilityDescription: tooltip))
-        statusItem.button?.image = image
-        statusItem.button?.title = title.isEmpty ? "" : " " + title
+    func setStatus(symbol: NSImage?, title: String, subtitle: String, count: String, tooltip: String, barTitle: String) {
+        statusSymbol.image = symbol
+        statusTitle.stringValue = title
+        statusSubtitle.stringValue = subtitle
+        countdown.stringValue = count
+        statusItem.button?.image = symbol
+        statusItem.button?.title = barTitle.isEmpty ? "" : " " + barTitle
         statusItem.button?.toolTip = "Siesta — " + tooltip
+    }
+
+    func symbol(_ name: String, _ description: String) -> NSImage? {
+        NSImage(systemSymbolName: name, accessibilityDescription: description)
     }
 
     func refresh() {
         let f = DateFormatter(); f.dateFormat = "HH:mm"
+        progressWrap.isHidden = phase == .stopped
         switch phase {
         case .stopped:
-            setStatusItem(symbol: "cat.face", fallback: "cat.fill", title: "", tooltip: "stopped")
-            statusLabel.stringValue = "Stopped"
-            startButton.title = "Start"
+            setStatus(symbol: App.inactiveIcon, title: "Cycle stopped",
+                      subtitle: "\(target.name) is not managed by Siesta", count: "—",
+                      tooltip: "inactive", barTitle: "")
+            runButton.title = "Start cycle"
         case .working:
-            let left = Int(ceil(max(0, workMinutes * 60 - workSeconds) / 60))
+            let total = workMinutes * 60
+            let elapsed = min(workSeconds, total)
+            let left = Int(ceil((total - elapsed) / 60))
+            progress.doubleValue = elapsed / total
+            progressLabel.stringValue = "Work interval"
+            progressDetail.stringValue = "\(Int(elapsed / 60)) of \(Int(workMinutes)) min elapsed"
             if isEncoding {
-                setStatusItem(symbol: "play.circle.fill", fallback: "play.fill", title: "\(left)m",
-                              tooltip: "\(target.name) is encoding, rest in \(left) min")
-                statusLabel.stringValue = "Working: rest after \(left) more min of encoding"
+                setStatus(symbol: symbol("play.circle.fill", "Working"), title: "\(target.name) is working",
+                          subtitle: "Next pause", count: "\(left)m",
+                          tooltip: "\(target.name) is working, pause in \(left) min", barTitle: "\(left)m")
             } else {
-                setStatusItem(symbol: "hourglass", fallback: "clock", title: "",
-                              tooltip: "waiting, \(target.name) is not encoding")
-                statusLabel.stringValue = "Waiting: \(target.name) is not encoding"
+                setStatus(symbol: symbol("hourglass", "Waiting"), title: "Waiting for \(target.name)",
+                          subtitle: "\(target.name) is not encoding", count: "\(left)m",
+                          tooltip: "waiting, \(target.name) is not encoding", barTitle: "")
             }
-            startButton.title = "Stop"
+            runButton.title = "Stop cycle"
         case .resting:
-            let end = restStart.addingTimeInterval(restMinutes * 60)
-            let left = Int(ceil(max(0, end.timeIntervalSinceNow) / 60))
-            setStatusItem(symbol: "pause.circle.fill", fallback: "pause.fill", title: "\(left)m",
-                          tooltip: "resting, \(target.name) resumes in \(left) min")
-            statusLabel.stringValue = "Resting until \(f.string(from: end))"
-            startButton.title = "Stop"
+            let total = restMinutes * 60
+            let elapsed = min(Date().timeIntervalSince(restStart), total)
+            let left = Int(ceil((total - elapsed) / 60))
+            progress.doubleValue = elapsed / total
+            progressLabel.stringValue = "Rest interval"
+            progressDetail.stringValue = "\(Int(elapsed / 60)) of \(Int(restMinutes)) min elapsed"
+            setStatus(symbol: symbol("pause.circle.fill", "Resting"), title: "\(target.name) is resting",
+                      subtitle: "Resumes at \(f.string(from: restStart.addingTimeInterval(total)))", count: "\(left)m",
+                      tooltip: "resting, \(target.name) resumes in \(left) min", barTitle: "\(left)m")
+            runButton.title = "Stop cycle"
         }
     }
 }

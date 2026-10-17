@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="2 2 20 20" role="img" aria-labelledby="title">
+  <title id="title">Siesta inactive cat</title>
+  <mask id="face">
+    <rect width="24" height="24" fill="white"/>
+    <path d="M6.8 12.9 Q8.8 14.7 10.7 12.9 M13.3 12.9 Q15.2 14.7 17.2 12.9" fill="none" stroke="black" stroke-width="1.6" stroke-linecap="round"/>
+    <path d="M11.1 16.1 Q12 15.5 12.9 16.1 Q12.8 16.8 12 17.2 Q11.2 16.8 11.1 16.1 Z" fill="black"/>
+  </mask>
+  <path d="M3.3 10.2 C3.3 7.6 4 4.6 5.1 2.8 L8.3 5.2 C9.5 4.6 10.7 4.3 12 4.3 C13.3 4.3 14.5 4.6 15.7 5.2 L18.9 2.8 C20 4.6 20.7 7.6 20.7 10.2 C21.3 11.5 21.3 13.5 20.9 15.5 C20.1 19.5 16.6 21.2 12 21.2 C7.4 21.2 3.9 19.5 3.1 15.5 C2.7 13.5 2.7 11.5 3.3 10.2 Z" fill="black" mask="url(#face)"/>
+</svg>
