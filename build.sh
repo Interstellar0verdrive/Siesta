@@ -18,5 +18,6 @@ if [[ "$1" == "--zip" ]]; then
   ZIP="build/Siesta-$VERSION.zip"
   rm -f "$ZIP"
   ditto -c -k --keepParent "$APP" "$ZIP"
-  echo "Packaged: $ZIP"
+  (cd build && shasum -a 256 "Siesta-$VERSION.zip" > "Siesta-$VERSION.zip.sha256")
+  echo "Packaged: $ZIP (+ .sha256)"
 fi

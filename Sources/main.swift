@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 
 // Siesta — a menu bar utility that gives a long-running encoder periodic rests.
 // It counts minutes of real work, freezes the worker processes (SIGSTOP) for a
@@ -239,6 +240,10 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     let logBox = LogBoxView()
     let versionLink = LinkButton(title: "", target: nil, action: nil)
     var updateURL: URL?
+    var updateZip: URL?
+    var updateSha: URL?
+    var updateVersion = ""
+    var updating = false
     var logView: NSTextView { logBox.list }
     var logExpanded = false
     var logCount = 0
@@ -299,6 +304,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in self?.checkForUpdate() }
         refresh()
         if CommandLine.arguments.contains("--start") { toggleRun() }
+        if CommandLine.arguments.contains("--auto-update") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in self?.openUpdate() }
+        }
         // The status item must be laid out before a popover can attach to it.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.showPanel() }
     }
@@ -610,7 +618,102 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         versionLink.window?.invalidateCursorRects(for: versionLink)
     }
 
-    @objc func openUpdate() { if let url = updateURL { NSWorkspace.shared.open(url) } }
+    @objc func openUpdate() {
+        if updateZip != nil && updateSha != nil && canSelfUpdate { performUpdate() }
+        else if let url = updateURL { NSWorkspace.shared.open(url) }
+    }
+
+    // MARK: In-app update
+    // Downloads the release zip, checks its SHA-256, swaps the bundle in place and relaunches.
+    // A bundle written by the app itself carries no quarantine flag, so Gatekeeper does not
+    // ask again: only the very first installation needs the manual approval.
+    var canSelfUpdate: Bool {
+        let bundle = Bundle.main.bundleURL
+        guard bundle.pathExtension == "app" else { return false }
+        return FileManager.default.isWritableFile(atPath: bundle.deletingLastPathComponent().path)
+    }
+
+    func updateStatus(_ text: String) {
+        versionLink.attributedTitle = NSAttributedString(string: text, attributes: [
+            .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
+    }
+
+    func updateFailed(_ reason: String) {
+        updating = false
+        log("Update failed: \(reason)")
+        if let url = updateURL { showUpdate(version: updateVersion, url: url) }
+    }
+
+    func performUpdate() {
+        guard let zipURL = updateZip, let shaURL = updateSha, !updating else { return }
+        updating = true
+        versionLink.isEnabled = false
+        updateStatus("Downloading…")
+        log("Downloading Siesta \(updateVersion)")
+        // 1) expected hash
+        URLSession.shared.dataTask(with: shaURL) { [weak self] data, _, _ in
+            guard let self = self else { return }
+            guard let data = data, let text = String(data: data, encoding: .utf8),
+                  let expected = text.split(whereSeparator: { $0 == " " || $0 == "\n" }).first.map(String.init),
+                  expected.count == 64 else {
+                DispatchQueue.main.async { self.updateFailed("checksum file unreadable") }; return
+            }
+            // 2) the zip, with progress
+            let task = URLSession.shared.downloadTask(with: zipURL) { tmp, _, error in
+                guard let tmp = tmp, error == nil, let zipData = try? Data(contentsOf: tmp) else {
+                    DispatchQueue.main.async { self.updateFailed(error?.localizedDescription ?? "download error") }; return
+                }
+                let digest = SHA256.hash(data: zipData).map { String(format: "%02x", $0) }.joined()
+                guard digest == expected.lowercased() else {
+                    DispatchQueue.main.async { self.updateFailed("checksum mismatch") }; return
+                }
+                DispatchQueue.main.async { self.install(zipData: zipData) }
+            }
+            var obs: NSKeyValueObservation? = nil
+            obs = task.progress.observe(\.fractionCompleted) { p, _ in
+                DispatchQueue.main.async { self.updateStatus("Downloading \(Int(p.fractionCompleted * 100))%") }
+                if p.fractionCompleted >= 1 { obs?.invalidate() }
+            }
+            task.resume()
+        }.resume()
+    }
+
+    func install(zipData: Data) {
+        updateStatus("Installing…")
+        let fm = FileManager.default
+        let work = fm.temporaryDirectory.appendingPathComponent("siesta-update-\(UUID().uuidString)")
+        let zip = work.appendingPathComponent("update.zip")
+        do {
+            try fm.createDirectory(at: work, withIntermediateDirectories: true)
+            try zipData.write(to: zip)
+            let unzip = Process()
+            unzip.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+            unzip.arguments = ["-x", "-k", zip.path, work.path]
+            try unzip.run(); unzip.waitUntilExit()
+            guard unzip.terminationStatus == 0 else { throw NSError(domain: "Siesta", code: 1, userInfo: [NSLocalizedDescriptionKey: "could not unpack the archive"]) }
+            let newApp = work.appendingPathComponent("Siesta.app")
+            let plist = newApp.appendingPathComponent("Contents/Info.plist")
+            guard let info = NSDictionary(contentsOf: plist), let v = info["CFBundleShortVersionString"] as? String, v == updateVersion else {
+                throw NSError(domain: "Siesta", code: 2, userInfo: [NSLocalizedDescriptionKey: "unexpected package contents"])
+            }
+            // 3) swap: old bundle to the Trash, new one in place
+            let current = Bundle.main.bundleURL
+            let destination = current
+            try fm.trashItem(at: current, resultingItemURL: nil)
+            try fm.moveItem(at: newApp, to: destination)
+            try? fm.removeItem(at: work)
+            log("Installed Siesta \(updateVersion), relaunching")
+            // 4) relaunch after this process has quit; a frozen worker is resumed on termination
+            let relaunch = Process()
+            relaunch.executableURL = URL(fileURLWithPath: "/bin/sh")
+            relaunch.arguments = ["-c", "sleep 1; /usr/bin/open \"\(destination.path)\""]
+            try relaunch.run()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { NSApp.terminate(nil) }
+        } catch {
+            try? fm.removeItem(at: work)
+            updateFailed(error.localizedDescription)
+        }
+    }
 
     /// Compares dotted version strings numerically: 1.10.0 > 1.9.2.
     func isNewer(_ a: String, than b: String) -> Bool {
@@ -632,9 +735,18 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                   let tag = json["tag_name"] as? String,
                   let page = (json["html_url"] as? String).flatMap(URL.init(string:)) else { return }
             let latest = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
+            let assets = json["assets"] as? [[String: Any]] ?? []
+            func asset(_ suffix: String) -> URL? {
+                assets.first { ($0["name"] as? String)?.hasSuffix(suffix) == true }
+                    .flatMap { ($0["browser_download_url"] as? String).flatMap(URL.init(string:)) }
+            }
+            let zip = asset(".zip"), sha = asset(".zip.sha256")
             DispatchQueue.main.async {
-                if self.isNewer(latest, than: self.currentVersion) { self.showUpdate(version: latest, url: page) }
-                else { self.showVersion() }
+                guard !self.updating else { return }
+                if self.isNewer(latest, than: self.currentVersion) {
+                    self.updateZip = zip; self.updateSha = sha; self.updateVersion = latest
+                    self.showUpdate(version: latest, url: page)
+                } else { self.showVersion() }
             }
         }.resume()
     }
