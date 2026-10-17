@@ -277,6 +277,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         statusItem.button?.target = self
         statusItem.button?.action = #selector(statusItemClicked)
         statusItem.button?.imagePosition = .imageLeft
+        statusItem.button?.imageHugsTitle = true
         buildPanel()
         let w = defaults.integer(forKey: "work"), r = defaults.integer(forKey: "rest")
         workField.integerValue = w == 0 ? 60 : w
@@ -674,7 +675,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         statusSubtitle.stringValue = subtitle
         countdown.stringValue = count
         statusItem.button?.image = symbol
-        statusItem.button?.title = barTitle.isEmpty ? "" : " " + barTitle
+        statusItem.button?.title = barTitle
         statusItem.button?.toolTip = "Siesta — " + tooltip
     }
 
