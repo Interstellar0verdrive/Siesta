@@ -18,7 +18,10 @@ lipo -create build/obj/Siesta-arm64 build/obj/Siesta-x86_64 -output "$APP/Conten
 cp Resources/Info.plist "$APP/Contents/"
 cp Resources/Siesta.icns Resources/states/*.png Resources/dialog/Siesta-light-512.png Resources/dialog/Siesta-dark-512.png "$APP/Contents/Resources/"
 ICON="icns only"
-if ACTOOL=$(xcrun --find actool 2>/dev/null); then
+ACTOOL=$(xcrun --find actool 2>/dev/null || true)
+# the Command Line Tools have no actool: look inside Xcode.app directly
+[[ -z "$ACTOOL" && -x /Applications/Xcode.app/Contents/Developer/usr/bin/actool ]] && ACTOOL=/Applications/Xcode.app/Contents/Developer/usr/bin/actool
+if [[ -n "$ACTOOL" ]]; then
   rm -rf build/obj/icon && mkdir -p build/obj/icon
   if "$ACTOOL" Resources/AppIcon.icon --compile "$APP/Contents/Resources" \
        --platform macosx --minimum-deployment-target 13.0 \
