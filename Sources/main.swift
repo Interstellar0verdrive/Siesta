@@ -950,7 +950,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
     func setStatus(state: String, description: String, title: String, subtitle: String, count: String, tooltip: String, barTitle: String) {
         statusSymbol.image = App.stateIcon(state, panel: true, description: description)
-        statusSymbol.contentTintColor = NSColor.labelColor.withAlphaComponent(0.82)
+        statusSymbol.contentTintColor = .labelColor   // dynamic: follows appearance changes while shown
+        statusSymbol.alphaValue = 0.82
         statusTitle.stringValue = title
         statusSubtitle.stringValue = subtitle
         countdown.stringValue = count
