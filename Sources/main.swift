@@ -74,6 +74,9 @@ final class ChartView: NSView {
     var onToggle: (() -> Void)?
     /// Manual zoom span (nil = automatic window). Pinch or scroll over the plot sets it; "Reset" clears it.
     var zoomSpan: TimeInterval? { didSet { needsDisplay = true } }
+    /// Right edge of the view while panned back in time; nil = follow the newest sample.
+    var viewEnd: TimeInterval? { didSet { needsDisplay = true } }
+    var isCustomView: Bool { zoomSpan != nil || viewEnd != nil }
     var collapsed = false { didSet { chevron.image = NSImage(systemSymbolName: collapsed ? "chevron.right" : "chevron.down", accessibilityDescription: collapsed ? "Expand chart" : "Collapse chart"); needsDisplay = true } }
 
     init() {
@@ -124,11 +127,42 @@ final class ChartView: NSView {
         let p = convert(event.locationInWindow, from: nil)
         guard p.x >= g.left - 4, p.x <= g.right + 4, p.y >= g.bottom, p.y <= g.top else { hoverT = nil; return }
         let t = g.start + Double((min(max(p.x, g.left), g.right) - g.left) / (g.right - g.left)) * g.span
-        hoverT = min(t, last.t)
+        hoverT = min(t, min(last.t, range.end))
     }
     override func mouseExited(with event: NSEvent) { hoverT = nil }
 
-    @objc func resetZoom() { zoomSpan = nil; legend.isEnabled = false; window?.invalidateCursorRects(for: legend) }
+    @objc func resetZoom() { zoomSpan = nil; viewEnd = nil; legend.isEnabled = false; window?.invalidateCursorRects(for: legend) }
+    private func markCustom() { legend.isEnabled = true; window?.invalidateCursorRects(for: legend) }
+
+    /// Shifts the view by a time delta, clamped to the recorded history; back at the right edge it follows Now again.
+    private func pan(by dt: TimeInterval) {
+        guard let first = samples.first?.t, let last = samples.last?.t else { return }
+        let (start, end) = range
+        let span = end - start
+        var newEnd = end + dt
+        newEnd = min(last, max(first + span, newEnd))
+        viewEnd = newEnd >= last - 0.5 ? nil : newEnd
+        if viewEnd == nil && zoomSpan == nil { legend.isEnabled = false; window?.invalidateCursorRects(for: legend) } else { markCustom() }
+    }
+    private var dragLastX: CGFloat?
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 { resetZoom(); return }
+        let p = convert(event.locationInWindow, from: nil)
+        guard let g = geom, !collapsed, p.x >= g.left, p.x <= g.right, p.y >= g.bottom, p.y <= g.top else { super.mouseDown(with: event); return }
+        dragLastX = p.x
+        NSCursor.closedHand.push()
+    }
+    override func mouseDragged(with event: NSEvent) {
+        guard let lastX = dragLastX, let g = geom else { return }
+        let p = convert(event.locationInWindow, from: nil)
+        let dt = -Double((p.x - lastX) / (g.right - g.left)) * g.span   // drag right = go back in time
+        dragLastX = p.x
+        pan(by: dt)
+        hoverT = nil
+    }
+    override func mouseUp(with event: NSEvent) {
+        if dragLastX != nil { NSCursor.pop(); dragLastX = nil }
+    }
 
     /// Longest span that has data: nothing to zoom into beyond what was recorded.
     let minZoom: TimeInterval = 30
@@ -136,19 +170,40 @@ final class ChartView: NSView {
         guard let first = samples.first?.t, let last = samples.last?.t else { return 0 }
         return min(maxWindow, last - first)
     }
-    private func zoom(by factor: Double) {
-        guard !collapsed, availableSpan > minZoom else { return }
-        let current = zoomSpan ?? (range.end - range.start)
+    private func zoom(by factor: Double, at anchor: TimeInterval?) {
+        guard !collapsed, availableSpan > minZoom, let first = samples.first?.t, let last = samples.last?.t else { return }
+        let (start, end) = range
+        let current = end - start
         let next = min(availableSpan, max(minZoom, current * factor))
+        // keep the time under the cursor where it is
+        let pivot = anchor ?? end
+        let frac = (pivot - start) / current
+        var newEnd = pivot + (1 - frac) * next
+        newEnd = min(last, max(first + next, newEnd))
         zoomSpan = next
-        legend.isEnabled = true
-        window?.invalidateCursorRects(for: legend)
+        viewEnd = newEnd >= last - 0.5 ? nil : newEnd
+        markCustom()
+    }
+    private func timeAt(_ event: NSEvent) -> TimeInterval? {
+        guard let g = geom else { return nil }
+        let p = convert(event.locationInWindow, from: nil)
+        return g.start + Double((min(max(p.x, g.left), g.right) - g.left) / (g.right - g.left)) * g.span
     }
     override func scrollWheel(with event: NSEvent) {
-        guard geom != nil, abs(event.scrollingDeltaY) > 0.5 else { return }
-        zoom(by: event.scrollingDeltaY > 0 ? 1.08 : 1 / 1.08)
+        guard let g = geom, !collapsed else { return }
+        let dx = event.scrollingDeltaX, dy = event.scrollingDeltaY
+        if abs(dx) > abs(dy) {
+            // horizontal scroll (two fingers, or a horizontal wheel): pan
+            guard abs(dx) > 0.5 else { return }
+            pan(by: -Double(dx / (g.right - g.left)) * g.span)
+        } else if !event.hasPreciseScrollingDeltas {
+            // mouse wheel: zoom around the cursor
+            guard abs(dy) > 0.5 else { return }
+            zoom(by: dy > 0 ? 1.08 : 1 / 1.08, at: timeAt(event))
+        }
+        // vertical two-finger scroll is left to the page
     }
-    override func magnify(with event: NSEvent) { zoom(by: 1 / max(0.2, 1 + event.magnification)) }
+    override func magnify(with event: NSEvent) { zoom(by: 1 / max(0.2, 1 + event.magnification), at: timeAt(event)) }
     let fullHeight: CGFloat = 140
     let collapsedHeight: CGFloat = 18
     var targetHeight: CGFloat { collapsed ? collapsedHeight : fullHeight }
@@ -162,7 +217,9 @@ final class ChartView: NSView {
     /// reaches 6 hours, then slides so the newest sample stays at the right edge.
     var range: (start: TimeInterval, end: TimeInterval) {
         guard let first = samples.first?.t, let last = samples.last?.t else { let n = Date.timeIntervalSinceReferenceDate; return (n - minWindow, n) }
-        if let z = zoomSpan { return (last - min(z, max(minZoom, last - first)), last) }
+        let end = min(last, viewEnd ?? last)
+        if let z = zoomSpan { return (end - min(z, max(minZoom, last - first)), end) }
+        if viewEnd != nil { let w = min(maxWindow, max(minWindow, last - first)); return (max(first, end - w), end) }
         if last - first >= maxWindow { return (last - maxWindow, last) }
         return (first, first + max(minWindow, last - first))
     }
@@ -197,7 +254,7 @@ final class ChartView: NSView {
         legend.attributedTitle = {
             let a = NSMutableAttributedString(string: "■ Rest    ", attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
             a.addAttribute(.foregroundColor, value: NSColor.labelColor.withAlphaComponent(0.18), range: NSRange(location: 0, length: 1))
-            if zoomSpan != nil {
+            if isCustomView {
                 a.append(NSAttributedString(string: "Reset", attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.labelColor, .underlineStyle: NSUnderlineStyle.single.rawValue]))
             } else {
                 a.append(NSAttributedString(string: windowLabel(), attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor]))
@@ -220,6 +277,8 @@ final class ChartView: NSView {
         let hovered: Sample? = hoverT.flatMap { ht in samples.min { abs($0.t - ht) < abs($1.t - ht) } }
             .flatMap { abs($0.t - hoverT!) < 30 ? $0 : nil }
 
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: NSRect(x: plotLeft, y: plotsBottom, width: plotW, height: plotsTop - plotsBottom)).addClip()
         // rest shading
         NSColor.labelColor.withAlphaComponent(0.08).setFill()
         var restStart: TimeInterval? = nil
@@ -237,7 +296,7 @@ final class ChartView: NSView {
             let b = NSBezierPath(); b.move(to: NSPoint(x: plotLeft, y: y)); b.line(to: NSPoint(x: plotRight, y: y)); b.lineWidth = 1; b.stroke()
         }
         // lines, one point per pixel column (mean of the samples in that column)
-        let visible = samples.filter { $0.t >= tStart }
+        let visible = samples.filter { $0.t >= tStart && $0.t <= tEnd }
         func path(_ value: (Sample) -> Double?, lane: NSRect, maxV: Double, minV: Double) -> NSBezierPath {
             let p = NSBezierPath(); p.lineWidth = 1.5; p.lineJoinStyle = .round
             var col = -1, acc = 0.0, n = 0, started = false
@@ -263,16 +322,28 @@ final class ChartView: NSView {
         let tMin = floor(((temps.min() ?? 30) - 5) / 10) * 10, tMax = ceil(((temps.max() ?? 80) + 5) / 10) * 10
         tempColor.setStroke()
         path({ $0.temp }, lane: tempLane, maxV: tMax, minV: tMin).stroke()
+        NSGraphicsContext.restoreGraphicsState()
         // now line + end dots
+        let nowVisible = last.t <= tEnd + 0.5
         let nx = x(last.t)
-        let now = NSBezierPath(); now.move(to: NSPoint(x: nx, y: plotsBottom)); now.line(to: NSPoint(x: nx, y: plotsTop))
-        now.setLineDash([3, 3], count: 2, phase: 0); now.lineWidth = 1; NSColor.labelColor.withAlphaComponent(0.45).setStroke(); now.stroke()
+        if nowVisible {
+            let now = NSBezierPath(); now.move(to: NSPoint(x: nx, y: plotsBottom)); now.line(to: NSPoint(x: nx, y: plotsTop))
+            now.setLineDash([3, 3], count: 2, phase: 0); now.lineWidth = 1; NSColor.labelColor.withAlphaComponent(0.45).setStroke(); now.stroke()
+        } else {
+            // panned back: a small chevron at the right edge says there is newer data
+            let cx = plotRight + 6, cy = (plotsTop + plotsBottom) / 2
+            let arrow = NSBezierPath(); arrow.move(to: NSPoint(x: cx - 3, y: cy + 4)); arrow.line(to: NSPoint(x: cx + 1, y: cy)); arrow.line(to: NSPoint(x: cx - 3, y: cy - 4))
+            arrow.lineWidth = 1.5; arrow.lineCapStyle = .round; arrow.lineJoinStyle = .round
+            NSColor.secondaryLabelColor.setStroke(); arrow.stroke()
+        }
         func dot(_ v: Double, lane: NSRect, maxV: Double, minV: Double, _ color: NSColor) {
             let py = lane.minY + CGFloat((v - minV) / max(1, maxV - minV)) * lane.height
             color.setFill(); NSBezierPath(ovalIn: NSRect(x: nx - 3, y: min(lane.maxY, max(lane.minY, py)) - 3, width: 6, height: 6)).fill()
         }
-        dot(last.cpu, lane: cpuLane, maxV: cpuMax, minV: 0, cpuColor)
-        if let t = last.temp { dot(t, lane: tempLane, maxV: tMax, minV: tMin, tempColor) }
+        if nowVisible {
+            dot(last.cpu, lane: cpuLane, maxV: cpuMax, minV: 0, cpuColor)
+            if let t = last.temp { dot(t, lane: tempLane, maxV: tMax, minV: tMin, tempColor) }
+        }
         // labels
         func text(_ s: String, _ pt: NSPoint, _ color: NSColor, _ weight: NSFont.Weight = .regular, right: Bool = false) {
             let a = NSAttributedString(string: s, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: weight), .foregroundColor: color])
@@ -297,13 +368,14 @@ final class ChartView: NSView {
         }
         // time axis: the start time flush left, "Now" at the right, the others spread evenly in between
         let labelCount = min(bounds.width > 420 ? 6 : 4, max(2, Int(w / 60)))   // never closer than a minute
-        let f = DateFormatter(); f.dateFormat = "HH:mm"
+        let f = DateFormatter(); f.dateFormat = w < 120 ? "HH:mm:ss" : "HH:mm"
         let hx: CGFloat? = hovered.map { x($0.t) }
         var previous = ""
         for i in 0..<labelCount {
             let t = tStart + w * Double(i) / Double(labelCount)          // spread over the visible window
             let tx = x(t)
-            guard t <= last.t, nx - tx > 44, hx.map({ abs($0 - tx) > 40 }) ?? true else { continue }
+            let rightX = nowVisible ? nx : plotRight
+            guard t <= last.t, rightX - tx > 44, hx.map({ abs($0 - tx) > 40 }) ?? true else { continue }
             let label = f.string(from: Date(timeIntervalSinceReferenceDate: t))
             guard label != previous else { continue }
             previous = label
@@ -315,9 +387,13 @@ final class ChartView: NSView {
             let lw = NSAttributedString(string: label, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)]).size().width
             let lx = min(max(hx - lw / 2, 0), bounds.width - lw)   // centred on the line, kept inside the view
             text(label, NSPoint(x: lx, y: 7), .labelColor, .semibold)
-            if nx - hx > 50 { text("Now", NSPoint(x: nx + 14, y: 7), .secondaryLabelColor, .medium, right: true) }
+            if (nowVisible ? nx : plotRight) - hx > 50 { rightLabel() }
         } else {
-            text("Now", NSPoint(x: nx + 14, y: 7), .secondaryLabelColor, .medium, right: true)
+            rightLabel()
+        }
+        func rightLabel() {
+            if nowVisible { text("Now", NSPoint(x: nx + 14, y: 7), .secondaryLabelColor, .medium, right: true) }
+            else { text(f.string(from: Date(timeIntervalSinceReferenceDate: tEnd)), NSPoint(x: plotRight + 14, y: 7), .secondaryLabelColor, .medium, right: true) }
         }
     }
 }
@@ -774,6 +850,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in self?.checkForUpdate() }
         refresh()
         if CommandLine.arguments.contains("--start") { toggleRun() }
+        }
         if CommandLine.arguments.contains("--auto-update") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in self?.openUpdate() }
         }
