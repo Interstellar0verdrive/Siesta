@@ -145,9 +145,20 @@ final class ChartView: NSView {
         if viewEnd == nil && zoomSpan == nil { legend.isEnabled = false; window?.invalidateCursorRects(for: legend) } else { markCustom() }
     }
     private var dragLastX: CGFloat?
+    private var leftArrowRect = NSRect.zero, rightArrowRect = NSRect.zero
+    /// Jump to the newest data keeping the current zoom.
+    func goToNow() { viewEnd = nil; if zoomSpan == nil { legend.isEnabled = false; window?.invalidateCursorRects(for: legend) } }
+    /// Jump to the beginning of the recorded history keeping the current zoom.
+    func goToStart() {
+        guard let first = samples.first?.t else { return }
+        let span = range.end - range.start
+        viewEnd = first + span; markCustom()
+    }
     override func mouseDown(with event: NSEvent) {
-        if event.clickCount == 2 { resetZoom(); return }
         let p = convert(event.locationInWindow, from: nil)
+        if rightArrowRect.contains(p) { goToNow(); return }
+        if leftArrowRect.contains(p) { goToStart(); return }
+        if event.clickCount == 2 { resetZoom(); return }
         guard let g = geom, !collapsed, p.x >= g.left, p.x <= g.right, p.y >= g.bottom, p.y <= g.top else { super.mouseDown(with: event); return }
         dragLastX = p.x
         NSCursor.closedHand.push()
@@ -165,7 +176,7 @@ final class ChartView: NSView {
     }
 
     /// Longest span that has data: nothing to zoom into beyond what was recorded.
-    let minZoom: TimeInterval = 30
+    let minZoom: TimeInterval = 60
     var availableSpan: TimeInterval {
         guard let first = samples.first?.t, let last = samples.last?.t else { return 0 }
         return min(maxWindow, last - first)
@@ -329,13 +340,18 @@ final class ChartView: NSView {
         if nowVisible {
             let now = NSBezierPath(); now.move(to: NSPoint(x: nx, y: plotsBottom)); now.line(to: NSPoint(x: nx, y: plotsTop))
             now.setLineDash([3, 3], count: 2, phase: 0); now.lineWidth = 1; NSColor.labelColor.withAlphaComponent(0.45).setStroke(); now.stroke()
-        } else {
-            // panned back: a small chevron at the right edge says there is newer data
-            let cx = plotRight + 6, cy = (plotsTop + plotsBottom) / 2
-            let arrow = NSBezierPath(); arrow.move(to: NSPoint(x: cx - 3, y: cy + 4)); arrow.line(to: NSPoint(x: cx + 1, y: cy)); arrow.line(to: NSPoint(x: cx - 3, y: cy - 4))
+        }
+        // edge chevrons: newer data to the right, older data to the left (click to jump)
+        func chevron(at cx: CGFloat, pointingRight: Bool) -> NSRect {
+            let cy = (plotsTop + plotsBottom) / 2, d: CGFloat = pointingRight ? 1 : -1
+            let arrow = NSBezierPath(); arrow.move(to: NSPoint(x: cx - 2 * d, y: cy + 4)); arrow.line(to: NSPoint(x: cx + 2 * d, y: cy)); arrow.line(to: NSPoint(x: cx - 2 * d, y: cy - 4))
             arrow.lineWidth = 1.5; arrow.lineCapStyle = .round; arrow.lineJoinStyle = .round
             NSColor.secondaryLabelColor.setStroke(); arrow.stroke()
+            return NSRect(x: cx - 10, y: plotsBottom, width: 20, height: plotsTop - plotsBottom)
         }
+        rightArrowRect = nowVisible ? .zero : chevron(at: plotRight + 7, pointingRight: true)
+        let firstT = samples.first?.t ?? tStart
+        leftArrowRect = tStart > firstT + 0.5 ? chevron(at: plotLeft - 7, pointingRight: false) : .zero
         func dot(_ v: Double, lane: NSRect, maxV: Double, minV: Double, _ color: NSColor) {
             let py = lane.minY + CGFloat((v - minV) / max(1, maxV - minV)) * lane.height
             color.setFill(); NSBezierPath(ovalIn: NSRect(x: nx - 3, y: min(lane.maxY, max(lane.minY, py)) - 3, width: 6, height: 6)).fill()
@@ -375,12 +391,13 @@ final class ChartView: NSView {
             let t = tStart + w * Double(i) / Double(labelCount)          // spread over the visible window
             let tx = x(t)
             let rightX = nowVisible ? nx : plotRight
-            guard t <= last.t, rightX - tx > 44, hx.map({ abs($0 - tx) > 40 }) ?? true else { continue }
             let label = f.string(from: Date(timeIntervalSinceReferenceDate: t))
-            guard label != previous else { continue }
-            previous = label
             let lw = NSAttributedString(string: label, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)]).size().width
-            text(label, NSPoint(x: i == 0 ? plotLeft : tx - lw / 2, y: 7), .secondaryLabelColor)
+            let lx = i == 0 ? plotLeft : tx - lw / 2
+            let clearOfHover = hx.map { abs($0 - (lx + lw / 2)) > lw + 6 } ?? true
+            guard t <= last.t, rightX - (lx + lw) > 8, clearOfHover, label != previous else { continue }
+            previous = label
+            text(label, NSPoint(x: lx, y: 7), .secondaryLabelColor)
         }
         if let hv = hovered, let hx = hx {
             let label = f.string(from: Date(timeIntervalSinceReferenceDate: hv.t))
