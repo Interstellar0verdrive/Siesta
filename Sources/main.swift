@@ -669,6 +669,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     let idleGrace: Double = 10       // seconds of low CPU before "idle" is declared
     var restStart = Date()
     var restEnd = Date()
+    var pausePlanned: Date?          // set when the work minutes are done: the next whole minute
     var isEncoding = false
     var frozenPids: [pid_t] = []
     let defaults = UserDefaults.standard
@@ -1232,7 +1233,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             defaults.set(workField.integerValue, forKey: "work")
             defaults.set(restField.integerValue, forKey: "rest")
             phase = .working
-            workSeconds = 0; idleSeconds = 0; lowSeconds = 0; isEncoding = false
+            workSeconds = 0; idleSeconds = 0; lowSeconds = 0; isEncoding = false; pausePlanned = nil
             lastTick = Date()
             log("Cycle started · \(Int(workMinutes)) min work, \(Int(restMinutes)) min rest")
         } else {
@@ -1384,23 +1385,27 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             }
             if encoding {
                 workSeconds += dt; idleSeconds = 0
-                if workSeconds >= workMinutes * 60 {
+                if workSeconds >= workMinutes * 60 && pausePlanned == nil {
+                    // work is done: pause on the next whole minute so both times are exact
+                    let t = now.timeIntervalSinceReferenceDate
+                    pausePlanned = Date(timeIntervalSinceReferenceDate: ceil(t / 60) * 60)
+                }
+                if let planned = pausePlanned, now >= planned {
                     // Freeze the workers; fall back to every process if none is identifiable.
                     let workers = procs.filter { $0.path.contains(target.workerMarker) }
                     let toFreeze = workers.isEmpty ? procs : workers
                     for p in toFreeze { kill(p.pid, SIGSTOP) }
                     frozenPids = toFreeze.map { $0.pid }
                     phase = .resting
-                    restStart = now
-                    // resume exactly when the clock reaches the announced minute
-                    let planned = now.addingTimeInterval(restMinutes * 60).timeIntervalSinceReferenceDate
-                    restEnd = Date(timeIntervalSinceReferenceDate: floor(planned / 60) * 60)
+                    pausePlanned = nil
+                    restStart = planned
+                    restEnd = planned.addingTimeInterval(restMinutes * 60)
                     log("\(target.name) paused · CPU \(Int(percentOfMachine(totalCpu)))%")
                 }
             } else {
                 idleSeconds += dt
                 if workSeconds > 0 && idleSeconds >= restMinutes * 60 {
-                    workSeconds = 0
+                    workSeconds = 0; pausePlanned = nil
                     log("Idle for \(Int(restMinutes)) min · work counter reset")
                 }
             }
@@ -1409,7 +1414,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             if now >= restEnd {
                 resume()
                 phase = .working
-                workSeconds = 0; idleSeconds = 0
+                workSeconds = 0; idleSeconds = 0; pausePlanned = nil
                 log("\(target.name) resumed")
             }
         }
@@ -1479,7 +1484,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             progressLabel.stringValue = "Work interval"
             progressDetail.stringValue = "\(Int(elapsed / 60)) of \(Int(workMinutes)) min elapsed"
             if isEncoding {
-                let eta = f.string(from: Date().addingTimeInterval(total - elapsed))
+                let eta = f.string(from: pausePlanned ?? Date().addingTimeInterval(total - elapsed))
                 setStatus(state: "working", description: "Working", title: "\(target.name) is working",
                           subtitle: "Next pause at \(eta)", count: "\(left)m",
                           tooltip: "\(target.name) is working, pause in \(left) min", barTitle: "\(left)m")
