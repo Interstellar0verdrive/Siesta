@@ -103,7 +103,7 @@ final class ChartView: NSView {
 
     // hover: time under the cursor, or nil
     var hoverT: TimeInterval? { didSet { if hoverT != oldValue { needsDisplay = true } } }
-    private var geom: (left: CGFloat, right: CGFloat, start: TimeInterval, span: TimeInterval)?
+    private var geom: (left: CGFloat, right: CGFloat, start: TimeInterval, span: TimeInterval, bottom: CGFloat, top: CGFloat)?
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         trackingAreas.forEach(removeTrackingArea)
@@ -112,7 +112,7 @@ final class ChartView: NSView {
     override func mouseMoved(with event: NSEvent) {
         guard !collapsed, let g = geom, let last = samples.last else { hoverT = nil; return }
         let p = convert(event.locationInWindow, from: nil)
-        guard p.x >= g.left - 4, p.x <= g.right + 4, p.y > 16 else { hoverT = nil; return }
+        guard p.x >= g.left - 4, p.x <= g.right + 4, p.y >= g.bottom, p.y <= g.top else { hoverT = nil; return }
         let t = g.start + Double((min(max(p.x, g.left), g.right) - g.left) / (g.right - g.left)) * g.span
         hoverT = min(t, last.t)
     }
@@ -176,7 +176,7 @@ final class ChartView: NSView {
         let tempLane = NSRect(x: plotLeft, y: plotsBottom, width: plotW, height: laneH)
         let (tStart, tEnd) = range
         let w = tEnd - tStart
-        geom = (plotLeft, plotRight, tStart, w)
+        geom = (plotLeft, plotRight, tStart, w, plotsBottom, plotsTop)
         func x(_ t: TimeInterval) -> CGFloat { plotLeft + CGFloat((t - tStart) / w) * plotW }
         // the sample under the cursor, if any: it takes over the right-hand values and the axis
         let hovered: Sample? = hoverT.flatMap { ht in samples.min { abs($0.t - ht) < abs($1.t - ht) } }
@@ -476,6 +476,7 @@ final class LinkButton: NSButton {
 /// Primary = accent fill with white text; secondary = subtle fill with label text.
 final class FlatButton: NSButton {
     let primary: Bool
+    var hoverFill: NSColor?          // e.g. red for a destructive action
     init(title: String, primary: Bool) {
         self.primary = primary
         super.init(frame: .zero)
@@ -490,8 +491,9 @@ final class FlatButton: NSButton {
     }
     required init?(coder: NSCoder) { fatalError() }
     func updateTitleColor() {
+        let white = primary || (hovered && hoverFill != nil)
         attributedTitle = NSAttributedString(string: title, attributes: [
-            .font: font!, .foregroundColor: primary ? NSColor.white : NSColor.labelColor])
+            .font: font!, .foregroundColor: white ? NSColor.white : NSColor.labelColor])
     }
     override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); updateTitleColor() }
     override var title: String { didSet { if wantsLayer { updateTitleColor() } } }
@@ -499,7 +501,7 @@ final class FlatButton: NSButton {
         let s = super.intrinsicContentSize
         return NSSize(width: s.width + (primary ? 28 : 24), height: primary ? 34 : 30)
     }
-    private var hovered = false { didSet { needsDisplay = true } }
+    private var hovered = false { didSet { updateTitleColor(); needsDisplay = true } }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         trackingAreas.forEach(removeTrackingArea)
@@ -514,6 +516,9 @@ final class FlatButton: NSButton {
             let base = NSColor.controlAccentColor
             let fill = isHighlighted ? base.blended(withFraction: 0.2, of: .black) : hovered ? base.blended(withFraction: 0.06, of: .white) : base
             layer?.backgroundColor = fill?.cgColor
+            layer?.borderColor = NSColor.white.withAlphaComponent(0.12).cgColor
+        } else if hovered, let fill = hoverFill {
+            layer?.backgroundColor = (isHighlighted ? fill.blended(withFraction: 0.2, of: .black) : fill)?.cgColor
             layer?.borderColor = NSColor.white.withAlphaComponent(0.12).cgColor
         } else {
             layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.16 : hovered ? 0.12 : 0.08).cgColor
@@ -743,6 +748,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
         // Footer: secondary quit button, right aligned
         let quitButton = FlatButton(title: "Quit Siesta", primary: false)
+        quitButton.hoverFill = .systemRed
         quitButton.target = self; quitButton.action = #selector(quit)
         quitButton.setAccessibilityLabel("Quit Siesta")
         versionLink.isBordered = false
