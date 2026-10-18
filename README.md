@@ -158,3 +158,8 @@ Thank you for trying it. I hope it gives your Mac, and you, a well-deserved rest
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+---
+
+If you enjoy Siesta, you can [buy me a coffee ☕](https://ko-fi.com/Interstellar0verdrive).
+Totally optional, always appreciated!
