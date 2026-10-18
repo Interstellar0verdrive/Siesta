@@ -1146,13 +1146,17 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     }
 
     // MARK: Loop
-    func record(cpu: Double) {
+    /// Share of the whole CPU (all logical cores = 100%), the way activity monitors show it.
+    let coreCount = Double(ProcessInfo.processInfo.activeProcessorCount)
+    func percentOfMachine(_ cpu: Double) -> Double { min(100, cpu / coreCount) }
+
+    func record(cpu rawCpu: Double) {
+        let cpu = percentOfMachine(rawCpu)
         let t = Date.timeIntervalSinceReferenceDate
         // dense while the chart is still filling its first 5 minutes, then one point every 5 s
         let every: TimeInterval = (chart.samples.first.map { t - $0.t } ?? 0) < chart.minWindow ? 1 : 5
         if let last = chart.samples.last?.t, t - last < every - 0.5 { return }
         chart.samples.append(Sample(t: t, cpu: cpu, temp: thermometer.hottest(), resting: phase == .resting))
-        chart.cpuMax = max(chart.cpuMax, ceil(cpu / 100) * 100)
         if let first = chart.samples.first?.t, t - first > chart.maxWindow + 60 {
             chart.samples.removeFirst(chart.samples.count / 10)   // trim in chunks, cheap
         }
@@ -1183,7 +1187,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             if encoding != isEncoding {
                 isEncoding = encoding
                 log(encoding ? "\(target.name) is encoding" :
-                    (procs.isEmpty ? "\(target.name) is not running" : "\(target.name) is idle · CPU \(Int(totalCpu))%"))
+                    (procs.isEmpty ? "\(target.name) is not running" : "\(target.name) is idle · CPU \(Int(percentOfMachine(totalCpu)))%"))
             }
             if encoding {
                 workSeconds += dt; idleSeconds = 0
@@ -1195,7 +1199,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                     frozenPids = toFreeze.map { $0.pid }
                     phase = .resting
                     restStart = now
-                    log("\(target.name) paused · CPU \(Int(totalCpu))%")
+                    log("\(target.name) paused · CPU \(Int(percentOfMachine(totalCpu)))%")
                 }
             } else {
                 idleSeconds += dt
