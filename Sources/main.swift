@@ -273,6 +273,13 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         return img
     }
 
+    /// The app artwork in the variant matching the current appearance, for dialogs: the .icns
+    /// Finder and the Dock use has a single variant on macOS versions without Icon Composer support.
+    static func appArtwork() -> NSImage? {
+        let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        return NSImage(named: dark ? "Siesta-dark-1024" : "Siesta-light-1024") ?? NSApp.applicationIconImage
+    }
+
     // MARK: Lifecycle
     func applicationDidFinishLaunching(_ n: Notification) {
         // Hidden switch for checking both appearances: --appearance light|dark
@@ -619,6 +626,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         guard defaults.string(forKey: "announced") != version else { return }
         defaults.set(version, forKey: "announced")
         let alert = NSAlert()
+        alert.icon = App.appArtwork()
         alert.messageText = "Siesta \(version) is available"
         alert.informativeText = canSelfUpdate && updateZip != nil
             ? "Click “Update to \(version)” next to the Quit button. Siesta downloads the new version, replaces itself and relaunches; macOS will not ask for approval again."

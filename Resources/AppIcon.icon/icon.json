@@ -1,0 +1,54 @@
+{
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "Siesta-dark-1024.png",
+          "name": "Siesta-dark-1024",
+          "hidden-specializations": [
+            {
+              "value": true
+            },
+            {
+              "appearance": "dark",
+              "value": false
+            }
+          ],
+          "position": {
+            "scale": 1.25,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "image-name": "Siesta-light-1024.png",
+          "name": "Siesta-light-1024",
+          "hidden-specializations": [
+            {
+              "value": false
+            },
+            {
+              "appearance": "dark",
+              "value": true
+            }
+          ],
+          "position": {
+            "scale": 1.25,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "supported-platforms": {
+    "circles": [
+      "watchOS"
+    ],
+    "squares": "shared"
+  }
+}

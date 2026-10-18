@@ -1,6 +1,11 @@
 #!/bin/zsh
 # Builds a universal (Apple Silicon + Intel) Siesta.app into ./build using only the
-# Xcode Command Line Tools. Pass --zip to also produce build/Siesta-<version>.zip.
+# Xcode Command Line Tools. Pass --zip to also produce build/Siesta-<version>.zip (+ .sha256).
+#
+# App icon: Resources/Siesta.icns is always bundled (macOS 13–15 and any build without Xcode).
+# When the full Xcode asset compiler (actool) is available, Resources/AppIcon.icon — the Icon
+# Composer package with the light and dark artwork — is compiled too, so macOS 26 and later
+# show the dark variant in Dark appearance.
 set -e
 cd "$(dirname "$0")"
 APP="build/Siesta.app"
@@ -11,9 +16,23 @@ swiftc -O -swift-version 5 -target arm64-apple-macos13  -o build/obj/Siesta-arm6
 swiftc -O -swift-version 5 -target x86_64-apple-macos13 -o build/obj/Siesta-x86_64 Sources/main.swift
 lipo -create build/obj/Siesta-arm64 build/obj/Siesta-x86_64 -output "$APP/Contents/MacOS/Siesta"
 cp Resources/Info.plist "$APP/Contents/"
-cp Resources/Siesta.icns Resources/states/*.png "$APP/Contents/Resources/"
+cp Resources/Siesta.icns Resources/states/*.png Resources/icon/Siesta-light-1024.png Resources/icon/Siesta-dark-1024.png "$APP/Contents/Resources/"
+ICON="icns only"
+if ACTOOL=$(xcrun --find actool 2>/dev/null); then
+  rm -rf build/obj/icon && mkdir -p build/obj/icon
+  if "$ACTOOL" Resources/AppIcon.icon --compile "$APP/Contents/Resources" \
+       --platform macosx --minimum-deployment-target 13.0 \
+       --app-icon AppIcon --include-all-app-icons \
+       --output-partial-info-plist build/obj/icon/partial.plist >/dev/null 2>build/obj/icon/actool.log; then
+    /usr/libexec/PlistBuddy -c 'Set :CFBundleIconName AppIcon' "$APP/Contents/Info.plist" 2>/dev/null \
+      || /usr/libexec/PlistBuddy -c 'Add :CFBundleIconName string AppIcon' "$APP/Contents/Info.plist"
+    ICON="icns + Icon Composer package"
+  else
+    ICON="icns only (actool failed, see build/obj/icon/actool.log)"
+  fi
+fi
 codesign --force --sign - "$APP"
-echo "Built: $APP ($VERSION, $(lipo -archs "$APP/Contents/MacOS/Siesta"))"
+echo "Built: $APP ($VERSION, $(lipo -archs "$APP/Contents/MacOS/Siesta"), icon: $ICON)"
 if [[ "$1" == "--zip" ]]; then
   ZIP="build/Siesta-$VERSION.zip"
   rm -f "$ZIP"
