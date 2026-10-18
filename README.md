@@ -40,29 +40,23 @@ Clicking the menu bar icon opens a popover with the current state, countdown and
 
 ### The panel in practice
 
-Expand **CPU & temperature** to see the recent history. The shaded bands mark scheduled rests: CPU usage falls while the worker is paused, and the temperature line shows how the Mac responds. The chart starts with a five-minute view, grows with the session, and then keeps a rolling six-hour history.
+Expand **CPU & temperature** to see the recent history. The shaded bands mark scheduled rests: CPU usage falls while the worker is paused, and the temperature line shows how the Mac responds. CPU is shown as a share of the whole Mac, from 0% to 100%. The chart starts with a five-minute view, grows with the session, and then keeps a rolling six-hour history.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="Resources/siesta-expanded-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="Resources/siesta-expanded-light.png">
-  <img src="Resources/siesta-expanded-dark.png" alt="Popover with a 30-minute work interval, 12 minutes until the next rest, and expanded CPU and temperature history with shaded rest periods">
-</picture>
+<a href="Resources/siesta-interface-expanded.png">
+  <img src="Resources/siesta-interface-expanded.png" alt="Siesta popover in light and dark mode, with a 30-minute work interval, 12 minutes until the next rest, and the graph expanded to show CPU, temperature and shaded rest periods">
+</a>
 
 Collapse the chart for just the current CPU and temperature readings. This keeps the popover short while preserving the countdown and controls.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="Resources/siesta-compact-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="Resources/siesta-compact-light.png">
-  <img src="Resources/siesta-compact-dark.png" alt="Compact popover with the chart collapsed to live CPU and temperature readings">
-</picture>
+<a href="Resources/siesta-interface-compact.png">
+  <img src="Resources/siesta-interface-compact.png" alt="Compact Siesta popover in light and dark mode, with the graph collapsed to live CPU and temperature readings">
+</a>
 
 Turn on **Detached window** to keep Siesta open as a regular window. Here the chart is collapsed and **Activity log** is expanded, showing recent pauses and resumes. Uncheck Detached window to return to the menu bar popover.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="Resources/siesta-detached-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="Resources/siesta-detached-light.png">
-  <img src="Resources/siesta-detached-dark.png" alt="Detached Siesta window during a five-minute rest, with current CPU and temperature readings and the expanded activity log">
-</picture>
+<a href="Resources/siesta-interface-detached.png">
+  <img src="Resources/siesta-interface-detached.png" alt="Detached Siesta window in light and dark mode during a five-minute rest, with current CPU and temperature readings and the expanded activity log">
+</a>
 
 ### A little about the name
 

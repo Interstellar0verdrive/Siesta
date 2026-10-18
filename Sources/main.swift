@@ -139,6 +139,12 @@ final class ChartView: NSView {
         return h == h.rounded() ? "Past \(Int(h)) hours" : String(format: "Past %.1f hours", h)
     }
 
+    /// Orange reads poorly on the dark panel: lift it a little there.
+    var tempColor: NSColor {
+        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        return dark ? NSColor.systemOrange.blended(withFraction: 0.3, of: .white) ?? .systemOrange : .systemOrange
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         if collapsed {
             // the header carries the live values while the plot is folded away
@@ -216,7 +222,7 @@ final class ChartView: NSView {
         path({ $0.cpu }, lane: cpuLane, maxV: cpuMax, minV: 0).stroke()
         let temps = visible.compactMap { $0.temp }
         let tMin = floor(((temps.min() ?? 30) - 5) / 10) * 10, tMax = ceil(((temps.max() ?? 80) + 5) / 10) * 10
-        NSColor.systemOrange.setStroke()
+        NSColortempColor.setStroke()
         path({ $0.temp }, lane: tempLane, maxV: tMax, minV: tMin).stroke()
         // now line + end dots
         let nx = x(last.t)
@@ -227,17 +233,17 @@ final class ChartView: NSView {
             color.setFill(); NSBezierPath(ovalIn: NSRect(x: nx - 3, y: min(lane.maxY, max(lane.minY, py)) - 3, width: 6, height: 6)).fill()
         }
         dot(last.cpu, lane: cpuLane, maxV: cpuMax, minV: 0, .controlAccentColor)
-        if let t = last.temp { dot(t, lane: tempLane, maxV: tMax, minV: tMin, .systemOrange) }
+        if let t = last.temp { dot(t, lane: tempLane, maxV: tMax, minV: tMin, tempColor) }
         // labels
         func text(_ s: String, _ pt: NSPoint, _ color: NSColor, _ weight: NSFont.Weight = .regular, right: Bool = false) {
             let a = NSAttributedString(string: s, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: weight), .foregroundColor: color])
             let sz = a.size(); a.draw(at: NSPoint(x: right ? pt.x - sz.width : pt.x, y: pt.y - sz.height / 2))
         }
         text("CPU", NSPoint(x: 0, y: cpuLane.midY), .controlAccentColor, .semibold)
-        text("Temp", NSPoint(x: 0, y: tempLane.midY), .systemOrange, .semibold)
+        text("Temp", NSPoint(x: 0, y: tempLane.midY), tempColor, .semibold)
         let shown = hovered ?? last
         text("\(Int(shown.cpu))%", NSPoint(x: bounds.width, y: cpuLane.midY), .controlAccentColor, .semibold, right: true)
-        text(shown.temp.map { "\(Int($0.rounded()))°C" } ?? "n/a", NSPoint(x: bounds.width, y: tempLane.midY), .systemOrange, .semibold, right: true)
+        text(shown.temp.map { "\(Int($0.rounded()))°C" } ?? "n/a", NSPoint(x: bounds.width, y: tempLane.midY), tempColor, .semibold, right: true)
         // hover cursor: solid line and dots at the hovered sample
         if let hv = hovered {
             let hx = x(hv.t)
@@ -248,7 +254,7 @@ final class ChartView: NSView {
                 color.setFill(); NSBezierPath(ovalIn: NSRect(x: hx - 3, y: min(lane.maxY, max(lane.minY, py)) - 3, width: 6, height: 6)).fill()
             }
             hdot(hv.cpu, lane: cpuLane, maxV: cpuMax, minV: 0, .controlAccentColor)
-            if let t = hv.temp { hdot(t, lane: tempLane, maxV: tMax, minV: tMin, .systemOrange) }
+            if let t = hv.temp { hdot(t, lane: tempLane, maxV: tMax, minV: tMin, tempColor) }
         }
         // time axis: at most 4 labels (6 in the wider window) plus "Now"; a label never overlaps "Now"
         let maxTicks = bounds.width > 420 ? 6 : 4
@@ -263,10 +269,10 @@ final class ChartView: NSView {
             tick += step
         }
         if let hv = hovered, let hx = hx {
-            let f2 = DateFormatter(); f2.dateFormat = "HH:mm:ss"
-            let label = f2.string(from: Date(timeIntervalSinceReferenceDate: hv.t))
-            let lx = min(max(hx, plotLeft + 26), plotRight - 26)
-            text(label, NSPoint(x: lx - 26, y: 7), .labelColor, .semibold)
+            let label = f.string(from: Date(timeIntervalSinceReferenceDate: hv.t))
+            let lw = NSAttributedString(string: label, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)]).size().width
+            let lx = min(max(hx - lw / 2, 0), bounds.width - lw)   // centred on the line, kept inside the view
+            text(label, NSPoint(x: lx, y: 7), .labelColor, .semibold)
             if nx - hx > 50 { text("Now", NSPoint(x: nx + 14, y: 7), .secondaryLabelColor, .medium, right: true) }
         } else {
             text("Now", NSPoint(x: nx + 14, y: 7), .secondaryLabelColor, .medium, right: true)
