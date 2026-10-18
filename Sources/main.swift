@@ -471,6 +471,14 @@ final class LogBoxView: NSView {
 final class NumberBox: NSView {
     let field = NSTextField()
     var editing = false { didSet { needsDisplay = true } }
+    private var hovered = false { didSet { needsDisplay = true } }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil))
+    }
+    override func mouseEntered(with event: NSEvent) { hovered = true }
+    override func mouseExited(with event: NSEvent) { hovered = false }
     init() {
         super.init(frame: .zero)
         wantsLayer = true
@@ -493,9 +501,24 @@ final class NumberBox: NSView {
     required init?(coder: NSCoder) { fatalError() }
     override var wantsUpdateLayer: Bool { true }
     override func updateLayer() {
-        layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.06).cgColor
-        layer?.borderColor = editing ? NSColor.controlAccentColor.cgColor : NSColor.labelColor.withAlphaComponent(0.35).cgColor
+        easeLayerColor(layer, "backgroundColor", to: NSColor.labelColor.withAlphaComponent(hovered && !editing ? 0.09 : 0.06).cgColor)
+        easeLayerColor(layer, "borderColor", to: editing ? NSColor.controlAccentColor.cgColor : NSColor.labelColor.withAlphaComponent(hovered ? 0.55 : 0.35).cgColor)
     }
+}
+
+/// Checkbox whose label softens on hover, with a hand cursor.
+final class HoverCheckbox: NSButton {
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil))
+    }
+    private func fade(_ on: Bool) {
+        NSAnimationContext.runAnimationGroup { ctx in ctx.duration = 0.15; self.animator().alphaValue = on ? 0.7 : 1 }
+    }
+    override func mouseEntered(with event: NSEvent) { fade(true) }
+    override func mouseExited(with event: NSEvent) { fade(false) }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
 }
 
 /// Text link: hand cursor on hover, like a web link.
@@ -589,7 +612,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     var workField: NSTextField { workBox.field }
     var restField: NSTextField { restBox.field }
     let runButton = FlatButton(title: "Start cycle", primary: true)
-    let detachCheckbox = NSButton(checkboxWithTitle: "Detached window", target: nil, action: nil)
+    let detachCheckbox: HoverCheckbox = {
+        let b = HoverCheckbox(frame: .zero); b.setButtonType(.switch); b.title = "Detached window"; return b
+    }()
     let logBox = LogBoxView()
     let versionLink = LinkButton(title: "", target: nil, action: nil)
     var updateURL: URL?
