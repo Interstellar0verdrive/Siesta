@@ -506,19 +506,52 @@ final class NumberBox: NSView {
     }
 }
 
-/// Checkbox whose label softens on hover, with a hand cursor.
-final class HoverCheckbox: NSButton {
+/// Checkbox drawn in the same style as the number fields: bordered box, eased hover, accent fill when on.
+final class StyledCheckbox: NSView {
+    var isOn = false { didSet { needsDisplay = true } }
+    var onToggle: (() -> Void)?
+    private let label = NSTextField(labelWithString: "")
+    private var hovered = false { didSet { needsDisplay = true } }
+    private let boxSize: CGFloat = 18
+    init(title: String) {
+        super.init(frame: .zero)
+        label.stringValue = title
+        label.font = .systemFont(ofSize: 13)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: boxSize + 8),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            heightAnchor.constraint(equalToConstant: 22),
+        ])
+        setAccessibilityRole(.checkBox)
+        setAccessibilityLabel(title)
+    }
+    required init?(coder: NSCoder) { fatalError() }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         trackingAreas.forEach(removeTrackingArea)
         addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil))
     }
-    private func fade(_ on: Bool) {
-        NSAnimationContext.runAnimationGroup { ctx in ctx.duration = 0.15; self.animator().alphaValue = on ? 0.7 : 1 }
-    }
-    override func mouseEntered(with event: NSEvent) { fade(true) }
-    override func mouseExited(with event: NSEvent) { fade(false) }
+    override func mouseEntered(with event: NSEvent) { hovered = true }
+    override func mouseExited(with event: NSEvent) { hovered = false }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+    override func mouseDown(with event: NSEvent) { isOn.toggle(); onToggle?() }
+    override var allowsVibrancy: Bool { false }
+    override func draw(_ dirtyRect: NSRect) {
+        let r = NSRect(x: 0, y: (bounds.height - boxSize) / 2, width: boxSize, height: boxSize)
+        let path = NSBezierPath(roundedRect: r.insetBy(dx: 0.5, dy: 0.5), xRadius: 5, yRadius: 5)
+        if isOn {
+            (hovered ? NSColor.controlAccentColor.blended(withFraction: 0.10, of: .white) ?? .controlAccentColor : .controlAccentColor).setFill(); path.fill()
+            let check = NSBezierPath(); check.lineWidth = 2; check.lineCapStyle = .round; check.lineJoinStyle = .round
+            check.move(to: NSPoint(x: r.minX + 4.5, y: r.midY)); check.line(to: NSPoint(x: r.minX + 7.5, y: r.minY + 4.5)); check.line(to: NSPoint(x: r.maxX - 4, y: r.maxY - 5))
+            NSColor.white.setStroke(); check.stroke()
+        } else {
+            NSColor.labelColor.withAlphaComponent(hovered ? 0.09 : 0.06).setFill(); path.fill()
+            NSColor.labelColor.withAlphaComponent(hovered ? 0.55 : 0.35).setStroke(); path.lineWidth = 1; path.stroke()
+        }
+    }
 }
 
 /// Text link: hand cursor on hover, like a web link.
@@ -612,9 +645,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     var workField: NSTextField { workBox.field }
     var restField: NSTextField { restBox.field }
     let runButton = FlatButton(title: "Start cycle", primary: true)
-    let detachCheckbox: HoverCheckbox = {
-        let b = HoverCheckbox(frame: .zero); b.setButtonType(.switch); b.title = "Detached window"; return b
-    }()
+    let detachCheckbox = StyledCheckbox(title: "Detached window")
     let logBox = LogBoxView()
     let versionLink = LinkButton(title: "", target: nil, action: nil)
     var updateURL: URL?
@@ -678,7 +709,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let w = defaults.integer(forKey: "work"), r = defaults.integer(forKey: "rest")
         workField.integerValue = w == 0 ? 60 : w
         restField.integerValue = r == 0 ? 5 : r
-        detachCheckbox.state = detached ? .on : .off
+        detachCheckbox.isOn = detached
         logExpanded = detached
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
         rescueFrozen()
@@ -796,7 +827,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             runButton.heightAnchor.constraint(equalTo: grid.heightAnchor),
             runButton.widthAnchor.constraint(equalTo: settings.widthAnchor, multiplier: 0.5, constant: -12),
         ])
-        detachCheckbox.target = self; detachCheckbox.action = #selector(toggleDetached)
+        detachCheckbox.onToggle = { [weak self] in self?.toggleDetached() }
 
         // Activity log box
         logBox.onToggle = { [weak self] in self?.toggleLog() }
@@ -998,7 +1029,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     }
 
     @objc func toggleDetached() {
-        let on = detachCheckbox.state == .on
+        let on = detachCheckbox.isOn
         defaults.set(on, forKey: "window")
         logExpanded = on          // the prototype opens the log in the window, closes it in the popover
         showPanel()
