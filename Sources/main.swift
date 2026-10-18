@@ -142,7 +142,7 @@ final class ChartView: NSView {
     /// Series colours: the system ones in light appearance, lifted a little on the dark panel.
     var isDark: Bool { effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
     var tempColor: NSColor { isDark ? NSColor.systemOrange.blended(withFraction: 0.15, of: .white) ?? .systemOrange : .systemOrange }
-    var cpuColor: NSColor { isDark ? NSColor.controlAccentColor.blended(withFraction: 0.3, of: .white) ?? .controlAccentColor : .controlAccentColor }
+    var cpuColor: NSColor { panelBlue(for: self) }
 
     override func draw(_ dirtyRect: NSRect) {
         if collapsed {
@@ -276,6 +276,26 @@ final class ChartView: NSView {
         } else {
             text("Now", NSPoint(x: nx + 14, y: 7), .secondaryLabelColor, .medium, right: true)
         }
+    }
+}
+
+/// The accent blue, lifted on the dark panel so it reads the same everywhere (chart, progress, button).
+func panelBlue(for view: NSView) -> NSColor {
+    let dark = view.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+    return dark ? NSColor.controlAccentColor.blended(withFraction: 0.3, of: .white) ?? .controlAccentColor : .controlAccentColor
+}
+
+/// Thin progress line drawn with the panel blue.
+final class ProgressLine: NSView {
+    var value: Double = 0 { didSet { needsDisplay = true } }
+    override var allowsVibrancy: Bool { false }
+    override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: 4) }
+    override func draw(_ dirtyRect: NSRect) {
+        let track = NSBezierPath(roundedRect: bounds, xRadius: 2, yRadius: 2)
+        NSColor.labelColor.withAlphaComponent(0.12).setFill(); track.fill()
+        let w = max(4, bounds.width * CGFloat(min(1, max(0, value))))
+        panelBlue(for: self).setFill()
+        NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: w, height: bounds.height), xRadius: 2, yRadius: 2).fill()
     }
 }
 
@@ -452,9 +472,13 @@ final class FlatButton: NSButton {
     }
     required init?(coder: NSCoder) { fatalError() }
     func updateTitleColor() {
+        // on the lifted dark-mode blue a near-black label keeps the contrast; white elsewhere
+        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let primaryColor: NSColor = dark ? NSColor(white: 0.06, alpha: 0.92) : .white
         attributedTitle = NSAttributedString(string: title, attributes: [
-            .font: font!, .foregroundColor: primary ? NSColor.white : NSColor.labelColor])
+            .font: font!, .foregroundColor: primary ? primaryColor : NSColor.labelColor])
     }
+    override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); updateTitleColor() }
     override var title: String { didSet { if wantsLayer { updateTitleColor() } } }
     override var intrinsicContentSize: NSSize {
         let s = super.intrinsicContentSize
@@ -463,7 +487,8 @@ final class FlatButton: NSButton {
     override var wantsUpdateLayer: Bool { true }
     override func updateLayer() {
         if primary {
-            layer?.backgroundColor = (isHighlighted ? NSColor.controlAccentColor.blended(withFraction: 0.2, of: .black) : NSColor.controlAccentColor)?.cgColor
+            let blue = panelBlue(for: self)
+            layer?.backgroundColor = (isHighlighted ? blue.blended(withFraction: 0.15, of: .black) : blue)?.cgColor
             layer?.borderColor = NSColor.white.withAlphaComponent(0.12).cgColor
         } else {
             layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.14 : 0.08).cgColor
@@ -491,7 +516,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     let statusSubtitle = NSTextField(labelWithString: "")
     let countdown = NSTextField(labelWithString: "")
     let progressWrap = NSStackView()
-    let progress = NSProgressIndicator()
+    let progress = ProgressLine()
     let progressLabel = NSTextField(labelWithString: "")
     let progressDetail = NSTextField(labelWithString: "")
     let chart = ChartView()
@@ -625,8 +650,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         statusRow.setCustomSpacing(16, after: titles)
 
         // Thin progress line with caption
-        progress.style = .bar; progress.isIndeterminate = false
-        progress.minValue = 0; progress.maxValue = 1; progress.controlSize = .small
+        progress.heightAnchor.constraint(equalToConstant: 4).isActive = true
         progressLabel.font = .systemFont(ofSize: 11); progressLabel.textColor = .secondaryLabelColor
         progressDetail.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         progressDetail.textColor = .secondaryLabelColor
@@ -1327,7 +1351,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             let total = workMinutes * 60
             let elapsed = min(workSeconds, total)
             let left = Int(ceil((total - elapsed) / 60))
-            progress.doubleValue = elapsed / total
+            progress.value = elapsed / total
             progressLabel.stringValue = "Work interval"
             progressDetail.stringValue = "\(Int(elapsed / 60)) of \(Int(workMinutes)) min elapsed"
             if isEncoding {
@@ -1344,7 +1368,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             let total = restMinutes * 60
             let elapsed = min(Date().timeIntervalSince(restStart), total)
             let left = Int(ceil((total - elapsed) / 60))
-            progress.doubleValue = elapsed / total
+            progress.value = elapsed / total
             progressLabel.stringValue = "Rest interval"
             progressDetail.stringValue = "\(Int(elapsed / 60)) of \(Int(restMinutes)) min elapsed"
             setStatus(state: "resting", description: "Resting", title: "\(target.name) is resting",
