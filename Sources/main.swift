@@ -514,7 +514,7 @@ final class FlatButton: NSButton {
     override func updateLayer() {
         if primary {
             let base = NSColor.controlAccentColor
-            let fill = isHighlighted ? base.blended(withFraction: 0.2, of: .black) : hovered ? base.blended(withFraction: 0.06, of: .white) : base
+            let fill = isHighlighted ? base.blended(withFraction: 0.2, of: .black) : hovered ? base.blended(withFraction: 0.10, of: .white) : base
             layer?.backgroundColor = fill?.cgColor
             layer?.borderColor = NSColor.white.withAlphaComponent(0.12).cgColor
         } else if hovered, let fill = hoverFill {
