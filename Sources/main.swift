@@ -690,8 +690,11 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     var frozenPids: [pid_t] = []
     let defaults = UserDefaults.standard
     var threshold: Double { defaults.object(forKey: "threshold") == nil ? 50.0 : defaults.double(forKey: "threshold") }
-    var workMinutes: Double { max(1, Double(workField.integerValue)) }
-    var restMinutes: Double { max(1, Double(restField.integerValue)) }
+    // the cycle uses the committed values, not what is being typed in the fields
+    var committedWork = 60
+    var committedRest = 5
+    var workMinutes: Double { Double(max(1, committedWork)) }
+    var restMinutes: Double { Double(max(1, committedRest)) }
     var detached: Bool { defaults.bool(forKey: "window") }
 
     /// Cat icons for the four states: black template PNGs (menu bar 20 pt, panel 48 pt)
@@ -727,6 +730,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let w = defaults.integer(forKey: "work"), r = defaults.integer(forKey: "rest")
         workField.integerValue = w == 0 ? 60 : w
         restField.integerValue = r == 0 ? 5 : r
+        committedWork = workField.integerValue
+        committedRest = restField.integerValue
         detachCheckbox.isOn = detached
         logExpanded = detached
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
@@ -1246,8 +1251,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     @objc func toggleRun() {
         panelController.view.window?.makeFirstResponder(nil)
         if phase == .stopped {
-            defaults.set(workField.integerValue, forKey: "work")
-            defaults.set(restField.integerValue, forKey: "rest")
+            committedWork = max(1, workField.integerValue); committedRest = max(1, restField.integerValue)
+            defaults.set(committedWork, forKey: "work")
+            defaults.set(committedRest, forKey: "rest")
             phase = .working
             workSeconds = 0; idleSeconds = 0; lowSeconds = 0; isEncoding = false; pausePlanned = nil
             lastTick = Date()
@@ -1306,6 +1312,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let old = defaults.integer(forKey: key)
         let new = max(1, field.integerValue)
         field.integerValue = new
+        if field === workField { committedWork = new } else { committedRest = new }
         if new != old {
             defaults.set(new, forKey: key)
             log("\(name) interval changed to \(new) min")
