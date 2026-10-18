@@ -1385,12 +1385,13 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             }
             if encoding {
                 workSeconds += dt; idleSeconds = 0
-                if workSeconds >= workMinutes * 60 && pausePlanned == nil {
-                    // work is done: pause on the next whole minute so both times are exact
-                    let t = now.timeIntervalSinceReferenceDate
-                    pausePlanned = Date(timeIntervalSinceReferenceDate: ceil(t / 60) * 60)
-                }
-                if let planned = pausePlanned, now >= planned {
+                // The work would complete at `projected` (e.g. 18:52:33): pause at the start of
+                // that minute (18:52:00), so the rest also ends on a whole minute.
+                let projected = now.timeIntervalSinceReferenceDate + (workMinutes * 60 - workSeconds)
+                let pauseAt = Date(timeIntervalSinceReferenceDate: floor(projected / 60) * 60)
+                pausePlanned = pauseAt
+                if now >= pauseAt {
+                    let planned = Date(timeIntervalSinceReferenceDate: floor(now.timeIntervalSinceReferenceDate / 60) * 60)
                     // Freeze the workers; fall back to every process if none is identifiable.
                     let workers = procs.filter { $0.path.contains(target.workerMarker) }
                     let toFreeze = workers.isEmpty ? procs : workers
