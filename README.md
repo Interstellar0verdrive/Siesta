@@ -15,7 +15,7 @@ Currently it watches **HandBrake**. The code is structured so other encoders (Td
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="Resources/siesta-hero-dark.png">
   <source media="(prefers-color-scheme: light)" srcset="Resources/siesta-hero-light.png">
-  <img src="Resources/siesta-hero-dark.png" alt="Illustration of Siesta in the macOS menu bar: HandBrake is working, with 12 minutes until the next pause and 18 of 30 work minutes elapsed">
+  <img src="Resources/siesta-hero-dark.png" alt="Siesta in the macOS menu bar: HandBrake is working, with 12 minutes until the next pause, 18 of 30 work minutes elapsed, and recent CPU and temperature history">
 </picture>
 
 ## How it works
@@ -36,7 +36,33 @@ Siesta keeps its status visible without crowding the menu bar. The cat changes t
   <img src="Resources/siesta-states-dark.png" alt="The four Siesta states: cycle stopped, working, resting, waiting">
 </picture>
 
-Clicking it opens a popover with the current state and countdown, a thin progress line for the running interval, the Work and Rest minutes, the Start/Stop cycle button, a collapsible activity log and a Quit button. The "Detached window" checkbox moves the same panel into a regular window; unchecking it brings the popover back. Changing the minutes while Siesta is running takes effect immediately and is noted in the log. "Stop cycle" stops Siesta's cycle only, never the encoder.
+Clicking the menu bar icon opens a popover with the current state, countdown and interval progress. You can change Work and Rest minutes while the cycle runs; changes take effect immediately and appear in the activity log. **Stop cycle** stops Siesta's cycle, never the encoder.
+
+### The panel in practice
+
+Expand **CPU & temperature** to see the recent history. The shaded bands mark scheduled rests: CPU usage falls while the worker is paused, and the temperature line shows how the Mac responds. The chart starts with a five-minute view, grows with the session, and then keeps a rolling six-hour history.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="Resources/siesta-expanded-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="Resources/siesta-expanded-light.png">
+  <img src="Resources/siesta-expanded-dark.png" alt="Popover with a 30-minute work interval, 12 minutes until the next rest, and expanded CPU and temperature history with shaded rest periods">
+</picture>
+
+Collapse the chart for just the current CPU and temperature readings. This keeps the popover short while preserving the countdown and controls.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="Resources/siesta-compact-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="Resources/siesta-compact-light.png">
+  <img src="Resources/siesta-compact-dark.png" alt="Compact popover with the chart collapsed to live CPU and temperature readings">
+</picture>
+
+Turn on **Detached window** to keep Siesta open as a regular window. Here the chart is collapsed and **Activity log** is expanded, showing recent pauses and resumes. Uncheck Detached window to return to the menu bar popover.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="Resources/siesta-detached-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="Resources/siesta-detached-light.png">
+  <img src="Resources/siesta-detached-dark.png" alt="Detached Siesta window during a five-minute rest, with current CPU and temperature readings and the expanded activity log">
+</picture>
 
 ### A little about the name
 
@@ -85,6 +111,17 @@ Siesta resumes a frozen worker when you stop the cycle, quit, or when it receive
 ```bash
 kill -CONT $(pgrep -x HandBrakeXPCService)
 ```
+
+## A note from the author
+
+Siesta started as a tool I built for myself, and it still is one. I am sharing it in case it is useful to someone else, with a few honest caveats:
+
+- **No warranty.** Siesta pauses and resumes other programs and keeps your Mac running long jobs. I have taken care to make that safe, but you use it at your own risk: I cannot take responsibility for lost encodes, overheated hardware or anything else that may go wrong.
+- **No promise of maintenance.** This is a hobby project, not a commercial product. I will keep improving it as long as I use it, but there is no schedule and no guarantee of support. Suggestions, bug reports and code contributions are very welcome, with the same spirit in mind.
+- **How it was made.** Part of the code was written with the help of AI tools. The design, the decisions, the review and the testing on several Macs are mine.
+- **macOS only.** Siesta relies on macOS features and there are no plans for a Windows or Linux version.
+
+Thank you for trying it. I hope it gives your Mac, and you, a well-deserved rest.
 
 ## License
 
