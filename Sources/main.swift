@@ -131,9 +131,9 @@ final class ChartView: NSView {
                 a.append(NSAttributedString(string: label, attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor]))
                 a.append(NSAttributedString(string: value, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold), .foregroundColor: color]))
             }
-            part("CPU ", last.map { "\(Int($0.cpu))%" } ?? "–", .controlAccentColor)
+            part("CPU ", last.map { "\(Int($0.cpu))%" } ?? "–", .labelColor)
             a.append(NSAttributedString(string: "   ·   ", attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.tertiaryLabelColor]))
-            part("Temp ", last?.temp.map { "\(Int($0.rounded()))°C" } ?? "n/a", .systemOrange)
+            part("Temp ", last?.temp.map { "\(Int($0.rounded()))°C" } ?? "n/a", .labelColor)
             legend.attributedStringValue = a
             return
         }
@@ -1156,8 +1156,13 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         if let first = chart.samples.first?.t, t - first > chart.maxWindow + 60 {
             chart.samples.removeFirst(chart.samples.count / 10)   // trim in chunks, cheap
         }
-        if !chart.isHidden { chart.needsDisplay = true }
+        // folded: refresh the header values only every 5 s, the data keeps its own cadence
+        if !chart.isHidden && (!chart.collapsed || t - lastCollapsedRefresh >= 5) {
+            chart.needsDisplay = true
+            lastCollapsedRefresh = t
+        }
     }
+    var lastCollapsedRefresh: TimeInterval = 0
 
     func tick() {
         let now = Date()
