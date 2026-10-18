@@ -164,9 +164,10 @@ final class ChartView: NSView {
         guard let first = samples.first?.t, let last = samples.last?.t else { return }
         let (start, end) = range
         let span = end - start
-        var newEnd = end + dt
-        newEnd = min(last, max(first + span, newEnd))
-        viewEnd = newEnd >= last - 0.5 ? nil : newEnd
+        let lo = min(first, last - span), hi = max(first, last - span)
+        let newStart = min(hi, max(lo, start + dt))
+        let following = span <= last - first ? newStart + span >= last - 0.5 : newStart <= first + 0.5
+        viewEnd = following ? nil : newStart + span
         if viewEnd == nil && zoomSpan == nil { legend.isEnabled = false; window?.invalidateCursorRects(for: legend) } else { markCustom() }
     }
     private var dragLastX: CGFloat?
@@ -219,10 +220,11 @@ final class ChartView: NSView {
         // keep the time under the cursor where it is
         let pivot = anchor ?? end
         let frac = (pivot - start) / current
-        var newEnd = pivot + (1 - frac) * next
-        newEnd = min(last, max(first + next, newEnd))
+        let lo = min(first, last - next), hi = max(first, last - next)
+        let newStart = min(hi, max(lo, pivot - frac * next))
         zoomSpan = next
-        viewEnd = newEnd >= last - 0.5 ? nil : newEnd
+        let following = next <= last - first ? newStart + next >= last - 0.5 : newStart <= first + 0.5
+        viewEnd = following ? nil : newStart + next
         markCustom()
     }
     private func timeAt(_ event: NSEvent) -> TimeInterval? {
@@ -258,11 +260,15 @@ final class ChartView: NSView {
     /// reaches 6 hours, then slides so the newest sample stays at the right edge.
     var range: (start: TimeInterval, end: TimeInterval) {
         guard let first = samples.first?.t, let last = samples.last?.t else { let n = Date.timeIntervalSinceReferenceDate; return (n - minWindow, n) }
-        let end = min(last, viewEnd ?? last)
         if let z = zoomSpan {
-            if last - first <= z { return (first, first + z) }      // data shorter than the view: keep it left-anchored
-            return (end - z, end)
+            // allowed starts: data narrower than the view may float inside it, wider data must fill it
+            let lo = min(first, last - z), hi = max(first, last - z)
+            let start: TimeInterval
+            if let e = viewEnd { start = min(hi, max(lo, e - z)) }
+            else { start = z <= last - first ? last - z : first }     // following now: newest at the right, or left-anchored
+            return (start, start + z)
         }
+        let end = min(last, viewEnd ?? last)
         if viewEnd != nil { let w = min(maxWindow, max(minWindow, last - first)); return (max(first, end - w), end) }
         if last - first >= maxWindow { return (last - maxWindow, last) }
         return (first, first + max(minWindow, last - first))
