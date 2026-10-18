@@ -222,9 +222,9 @@ final class ChartView: NSView {
         let step = steps.first { w / $0 <= Double(maxTicks) } ?? 7200
         let f = DateFormatter(); f.dateFormat = "HH:mm"
         var tick = (floor(tStart / step) + 1) * step
-        while tick <= tEnd {
+        while tick <= last.t {                       // only times that have already passed
             let tx = x(tick)
-            if abs(tx - nx) > 44 { text(f.string(from: Date(timeIntervalSinceReferenceDate: tick)), NSPoint(x: tx - 16, y: 7), .secondaryLabelColor) }
+            if nx - tx > 44 { text(f.string(from: Date(timeIntervalSinceReferenceDate: tick)), NSPoint(x: tx - 16, y: 7), .secondaryLabelColor) }
             tick += step
         }
         text("Now", NSPoint(x: nx + 14, y: 7), .secondaryLabelColor, .medium, right: true)
