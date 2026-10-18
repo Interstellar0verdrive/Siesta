@@ -26,9 +26,11 @@ Siesta counts the minutes the encoder has **actually** been working, then pauses
 - If HandBrake stays idle for at least the rest duration, the work counter resets: it already had its rest.
 - Stopping or quitting Siesta always resumes a frozen worker first.
 
-### Four states. One familiar face.
 
-**The cat tells you what Siesta is doing, right from the menu bar.** It changes to show whether the cycle is stopped, HandBrake is encoding, taking a scheduled rest, or Siesta is waiting for work. During work and rest, the number beside it shows the minutes until the next change.
+## Four states. One familiar face.
+#### The cat tells you what Siesta is doing, right from the menu bar.
+
+It changes to show whether the cycle is stopped, HandBrake is encoding, taking a scheduled rest, or Siesta is waiting for work. During work and rest, the number beside it shows the minutes until the next change.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="Resources/siesta-states-dark.png">
@@ -36,9 +38,11 @@ Siesta counts the minutes the encoder has **actually** been working, then pauses
   <img src="Resources/siesta-states-dark.png" alt="The four Siesta states: cycle stopped, working, resting, waiting">
 </picture>
 
-### The panel
 
-**Everything Siesta knows, one click away.** Clicking the menu bar icon opens a popover with the current state and a countdown to the next change, a thin progress line for the running interval, the Work and Rest minutes, the Start/Stop cycle button, a collapsible activity log and a Quit button. "Next pause at" and "Resumes at" show exact times, because pauses start on a whole minute and rests last exactly the minutes you set.
+## The panel
+#### Everything Siesta knows, one click away.
+
+Clicking the menu bar icon opens a popover with the current state and a countdown to the next change, a thin progress line for the running interval, the Work and Rest minutes, the Start/Stop cycle button, a collapsible activity log and a Quit button. "Next pause at" and "Resumes at" show exact times, because pauses start on a whole minute and rests last exactly the minutes you set.
 
 You can change Work and Rest while the cycle runs: the new value applies as soon as you confirm it with Return, Tab or a click elsewhere, and the change appears in the activity log. In the two fields, the ↑ and ↓ keys step the value by one minute, by ten with Shift. **Stop cycle** stops Siesta's cycle, never the encoder.
 
@@ -46,9 +50,11 @@ You can change Work and Rest while the cycle runs: the new value applies as soon
   <img src="Resources/siesta-interface-compact.png" alt="Compact Siesta popover in light and dark mode, with the graph collapsed to live CPU and temperature readings">
 </a>
 
-### See the cycle unfold
 
-**Open the graph to follow CPU load, temperature and scheduled rests.** Expand **CPU & temperature** to see the recent history. The blue line is the encoder's CPU usage as a share of the whole Mac, from 0% to 100%; the orange line is the hottest CPU die. The shaded bands mark scheduled rests: CPU usage falls while the worker is paused, and the temperature line shows how the Mac responds.
+## See the cycle unfold
+#### Open the graph to follow CPU load, temperature and scheduled rests.
+
+Expand **CPU & temperature** to see the recent history. The blue line is the encoder's CPU usage as a share of the whole Mac, from 0% to 100%; the orange line is the hottest CPU die. The shaded bands mark scheduled rests: CPU usage falls while the worker is paused, and the temperature line shows how the Mac responds.
 
 The chart starts with a five-minute view, grows with the session, and then keeps a rolling six-hour history. Hovering over the plot shows the readings and the time of that moment. Pinch on the trackpad or scroll over the plot to zoom in on the recent part, down to 30 seconds and never beyond the recorded history; click **Reset** to return to the automatic view.
 
@@ -58,19 +64,23 @@ Collapse the chart with the chevron next to its title and the header keeps showi
   <img src="Resources/siesta-interface-expanded.png" alt="Siesta popover in light and dark mode, with a 30-minute work interval, 12 minutes until the next rest, and the graph expanded to show CPU, temperature and shaded rest periods">
 </a>
 
-### A window when you need one
 
-**Detach the panel and open the activity log.** Turn on **Detached window** to keep Siesta open as a regular window that floats above your other apps, handy when you want to keep an eye on a long queue without reopening the popover. It holds exactly the same panel, with a little more room for the activity log. Here the chart is collapsed and **Activity log** is expanded, showing recent pauses and resumes. Uncheck Detached window to return to the menu bar popover.
+## A window when you need one
+#### Detach the panel and open the activity log.
+
+Turn on **Detached window** to keep Siesta open as a regular window that floats above your other apps, handy when you want to keep an eye on a long queue without reopening the popover. It holds exactly the same panel, with a little more room for the activity log. Here the chart is collapsed and **Activity log** is expanded, showing recent pauses and resumes. Uncheck Detached window to return to the menu bar popover.
 
 <a href="Resources/siesta-interface-detached.png">
   <img src="Resources/siesta-interface-detached.png" alt="Detached Siesta window in light and dark mode during a five-minute rest, with current CPU and temperature readings and the expanded activity log">
 </a>
 
-### A little about the name
+
+## A little about the name
 
 Siesta takes its name from the afternoon nap. The cat curled up beneath a warm sun reflects the same idea: even a Mac running a long encode deserves a little rest along the way.
 
 ![The Siesta icon in its light and dark variants: a cat asleep in front of the sun](Resources/siesta-icon-showcase.png)
+
 
 ## Download
 
@@ -88,6 +98,7 @@ The current version is shown in small print next to the Quit button. While Siest
 
 When a newer release exists the version turns into an **Update to x.y.z** link. Clicking it downloads the release archive, verifies its SHA-256 checksum against the one published with the release, replaces the app in place (the old copy goes to the Trash) and relaunches. Because the new bundle is written by Siesta itself it carries no quarantine flag, so macOS does not ask for approval again: only the very first installation needs it. If the app lives in a folder Siesta cannot write to, or anything goes wrong, the link simply opens the release page instead.
 
+
 ## Building
 
 Only the Xcode Command Line Tools are needed:
@@ -100,9 +111,11 @@ The app is produced at `build/Siesta.app` as a universal binary; `./build.sh --z
 
 Launching the binary with `--start` starts the cycle immediately with the last saved values.
 
+
 ## Preferences
 
 Stored in the `io.github.interstellar0verdrive.siesta` defaults domain: `work`, `rest` (minutes), `window` (detached window), `threshold` (CPU percentage considered "encoding", default 50, not exposed in the UI).
+
 
 ## Is pausing safe for the files?
 
