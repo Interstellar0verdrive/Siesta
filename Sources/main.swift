@@ -282,7 +282,7 @@ final class ChartView: NSView {
 /// The accent blue, lifted on the dark panel so it reads the same everywhere (chart, progress, button).
 func panelBlue(for view: NSView) -> NSColor {
     let dark = view.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-    return dark ? NSColor.controlAccentColor.blended(withFraction: 0.3, of: .white) ?? .controlAccentColor : .controlAccentColor
+    return dark ? NSColor.controlAccentColor.blended(withFraction: 0.15, of: .white) ?? .controlAccentColor : .controlAccentColor
 }
 
 /// Thin progress line drawn with the panel blue.
@@ -472,11 +472,8 @@ final class FlatButton: NSButton {
     }
     required init?(coder: NSCoder) { fatalError() }
     func updateTitleColor() {
-        // on the lifted dark-mode blue a near-black label keeps the contrast; white elsewhere
-        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let primaryColor: NSColor = dark ? NSColor(white: 0.06, alpha: 0.92) : .white
         attributedTitle = NSAttributedString(string: title, attributes: [
-            .font: font!, .foregroundColor: primary ? primaryColor : NSColor.labelColor])
+            .font: font!, .foregroundColor: primary ? NSColor.white : NSColor.labelColor])
     }
     override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); updateTitleColor() }
     override var title: String { didSet { if wantsLayer { updateTitleColor() } } }
@@ -487,8 +484,7 @@ final class FlatButton: NSButton {
     override var wantsUpdateLayer: Bool { true }
     override func updateLayer() {
         if primary {
-            let blue = panelBlue(for: self)
-            layer?.backgroundColor = (isHighlighted ? blue.blended(withFraction: 0.15, of: .black) : blue)?.cgColor
+            layer?.backgroundColor = (isHighlighted ? NSColor.controlAccentColor.blended(withFraction: 0.2, of: .black) : NSColor.controlAccentColor)?.cgColor
             layer?.borderColor = NSColor.white.withAlphaComponent(0.12).cgColor
         } else {
             layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.14 : 0.08).cgColor
