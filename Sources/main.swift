@@ -733,7 +733,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         committedWork = workField.integerValue
         committedRest = restField.integerValue
         detachCheckbox.isOn = detached
-        logExpanded = detached
+        logExpanded = defaults.bool(forKey: "logExpanded")   // collapsed the first time, then as last left
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
         rescueFrozen()
         installSignalHandlers()
@@ -1054,12 +1054,12 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     @objc func toggleDetached() {
         let on = detachCheckbox.isOn
         defaults.set(on, forKey: "window")
-        logExpanded = on          // the prototype opens the log in the window, closes it in the popover
         showPanel()
     }
 
     @objc func toggleLog() {
         logExpanded.toggle()
+        defaults.set(logExpanded, forKey: "logExpanded")
         layoutPanel()
         if logExpanded { logView.scrollToEndOfDocument(nil) }
     }
