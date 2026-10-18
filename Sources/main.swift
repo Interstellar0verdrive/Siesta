@@ -246,7 +246,8 @@ final class ChartView: NSView {
         guard !collapsed, let first = samples.first?.t, let last = samples.last?.t, last - first > 5 else { return }
         let (start, end) = range
         let current = end - start
-        let widest = max(availableSpan, current)                 // never wider than data, unless already shown
+        let autoWidth = last - first >= maxWindow ? maxWindow : max(minWindow, last - first)
+        let widest = max(availableSpan, autoWidth)                // zoom out up to what the automatic view shows
         let next = min(widest, max(minZoom, current * factor))
         let pivot = anchor ?? end
         let frac = (pivot - start) / current
