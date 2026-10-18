@@ -222,7 +222,7 @@ final class ChartView: NSView {
         path({ $0.cpu }, lane: cpuLane, maxV: cpuMax, minV: 0).stroke()
         let temps = visible.compactMap { $0.temp }
         let tMin = floor(((temps.min() ?? 30) - 5) / 10) * 10, tMax = ceil(((temps.max() ?? 80) + 5) / 10) * 10
-        NSColortempColor.setStroke()
+        tempColor.setStroke()
         path({ $0.temp }, lane: tempLane, maxV: tMax, minV: tMin).stroke()
         // now line + end dots
         let nx = x(last.t)
