@@ -86,7 +86,13 @@ final class ChartView: NSView {
         headerRow.addSubview(titleRow)
         headerRow.onClick = { [weak self] in self?.onToggle?() }
         headerRow.highlightsBackground = false
-        headerRow.onHover = { [weak self] on in self?.chevron.alphaValue = on ? 0.6 : 1; self?.header.alphaValue = on ? 0.6 : 1 }
+        headerRow.onHover = { [weak self] on in
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.15
+                self?.chevron.animator().alphaValue = on ? 0.6 : 1
+                self?.header.animator().alphaValue = on ? 0.6 : 1
+            }
+        }
         for v in [headerRow, legend] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
         NSLayoutConstraint.activate([
             titleRow.leadingAnchor.constraint(equalTo: headerRow.leadingAnchor), titleRow.trailingAnchor.constraint(equalTo: headerRow.trailingAnchor),
@@ -316,12 +322,37 @@ final class LogTextView: NSTextView {
     override var acceptsFirstResponder: Bool { false }
 }
 
+/// Eases a layer colour change over 150 ms (view-backed layers do not animate implicitly).
+func easeLayerColor(_ layer: CALayer?, _ keyPath: String, to color: CGColor?) {
+    guard let layer = layer else { return }
+    let anim = CABasicAnimation(keyPath: keyPath)
+    anim.fromValue = layer.presentation()?.value(forKeyPath: keyPath) ?? layer.value(forKeyPath: keyPath)
+    anim.toValue = color
+    anim.duration = 0.15
+    anim.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+    layer.add(anim, forKey: keyPath)
+    layer.setValue(color, forKeyPath: keyPath)
+}
+
 /// Row that reports clicks to a closure, with a light hover highlight and a hand cursor.
 final class ClickableRow: NSView {
     var onClick: (() -> Void)?
     var onHover: ((Bool) -> Void)?
     var highlightsBackground = true
-    private var hovered = false { didSet { needsDisplay = true; onHover?(hovered) } }
+    private var hoverAlpha: CGFloat = 0 { didSet { needsDisplay = true } }
+    private var fade: Timer?
+    private var hovered = false {
+        didSet {
+            onHover?(hovered)
+            fade?.invalidate()
+            let from = hoverAlpha, to: CGFloat = hovered ? 1 : 0, start = Date()
+            fade = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] t in
+                let p = min(1, Date().timeIntervalSince(start) / 0.15)
+                self?.hoverAlpha = from + (to - from) * CGFloat(p)
+                if p >= 1 { t.invalidate() }
+            }
+        }
+    }
     override func mouseDown(with event: NSEvent) { onClick?() }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -332,8 +363,8 @@ final class ClickableRow: NSView {
     override func mouseExited(with event: NSEvent) { hovered = false }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
     override func draw(_ dirtyRect: NSRect) {
-        guard hovered, highlightsBackground else { return }
-        NSColor.labelColor.withAlphaComponent(0.05).setFill()
+        guard hoverAlpha > 0, highlightsBackground else { return }
+        NSColor.labelColor.withAlphaComponent(0.05 * hoverAlpha).setFill()
         NSBezierPath(roundedRect: bounds, xRadius: 7, yRadius: 7).fill()
     }
 }
@@ -512,18 +543,20 @@ final class FlatButton: NSButton {
     override func resetCursorRects() { if isEnabled { addCursorRect(bounds, cursor: .pointingHand) } }
     override var wantsUpdateLayer: Bool { true }
     override func updateLayer() {
+        let fill: NSColor?, border: NSColor
         if primary {
             let base = NSColor.controlAccentColor
-            let fill = isHighlighted ? base.blended(withFraction: 0.2, of: .black) : hovered ? base.blended(withFraction: 0.10, of: .white) : base
-            layer?.backgroundColor = fill?.cgColor
-            layer?.borderColor = NSColor.white.withAlphaComponent(0.12).cgColor
-        } else if hovered, let fill = hoverFill {
-            layer?.backgroundColor = (isHighlighted ? fill.blended(withFraction: 0.2, of: .black) : fill)?.cgColor
-            layer?.borderColor = NSColor.white.withAlphaComponent(0.12).cgColor
+            fill = isHighlighted ? base.blended(withFraction: 0.2, of: .black) : hovered ? base.blended(withFraction: 0.10, of: .white) : base
+            border = NSColor.white.withAlphaComponent(0.12)
+        } else if hovered, let red = hoverFill {
+            fill = isHighlighted ? red.blended(withFraction: 0.2, of: .black) : red
+            border = NSColor.white.withAlphaComponent(0.12)
         } else {
-            layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.16 : hovered ? 0.12 : 0.08).cgColor
-            layer?.borderColor = NSColor.labelColor.withAlphaComponent(hovered ? 0.24 : 0.16).cgColor
+            fill = NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.16 : hovered ? 0.12 : 0.08)
+            border = NSColor.labelColor.withAlphaComponent(hovered ? 0.24 : 0.16)
         }
+        easeLayerColor(layer, "backgroundColor", to: fill?.cgColor)
+        easeLayerColor(layer, "borderColor", to: border.cgColor)
     }
     override var isHighlighted: Bool { didSet { needsDisplay = true } }
     // always in the Tab loop, not only with Full Keyboard Access; focus must be visible
