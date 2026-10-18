@@ -67,24 +67,39 @@ final class ChartView: NSView {
     var cpuMax: Double = 100          // y scale for the CPU line (grows with observed load)
     let minWindow: TimeInterval = 5 * 60
     let maxWindow: TimeInterval = 6 * 3600
+    let headerRow = ClickableRow()
+    let chevron = NSImageView()
     let header = NSTextField(labelWithString: "CPU & temperature")
     let legend = NSTextField(labelWithString: "")
+    var onToggle: (() -> Void)?
+    var collapsed = false { didSet { chevron.image = NSImage(systemSymbolName: collapsed ? "chevron.right" : "chevron.down", accessibilityDescription: collapsed ? "Expand chart" : "Collapse chart"); needsDisplay = true } }
 
     init() {
         super.init(frame: .zero)
+        chevron.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
+        chevron.contentTintColor = .secondaryLabelColor
         header.font = .systemFont(ofSize: 13, weight: .semibold)
         legend.font = .systemFont(ofSize: 11); legend.textColor = .secondaryLabelColor
         legend.alignment = .right
-        for v in [header, legend] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
+        let titleRow = NSStackView(views: [chevron, header]); titleRow.orientation = .horizontal; titleRow.spacing = 6
+        titleRow.translatesAutoresizingMaskIntoConstraints = false
+        headerRow.addSubview(titleRow)
+        headerRow.onClick = { [weak self] in self?.onToggle?() }
+        for v in [headerRow, legend] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
         NSLayoutConstraint.activate([
-            header.leadingAnchor.constraint(equalTo: leadingAnchor), header.topAnchor.constraint(equalTo: topAnchor),
+            titleRow.leadingAnchor.constraint(equalTo: headerRow.leadingAnchor), titleRow.trailingAnchor.constraint(equalTo: headerRow.trailingAnchor),
+            titleRow.topAnchor.constraint(equalTo: headerRow.topAnchor), titleRow.bottomAnchor.constraint(equalTo: headerRow.bottomAnchor),
+            headerRow.leadingAnchor.constraint(equalTo: leadingAnchor), headerRow.topAnchor.constraint(equalTo: topAnchor),
             legend.trailingAnchor.constraint(equalTo: trailingAnchor), legend.firstBaselineAnchor.constraint(equalTo: header.firstBaselineAnchor),
         ])
         heightConstraint = heightAnchor.constraint(equalToConstant: fullHeight)
         heightConstraint.isActive = true
+        collapsed = false
     }
     required init?(coder: NSCoder) { fatalError() }
-    let fullHeight: CGFloat = 200
+    let fullHeight: CGFloat = 140
+    let collapsedHeight: CGFloat = 18
+    var targetHeight: CGFloat { collapsed ? collapsedHeight : fullHeight }
     var heightConstraint: NSLayoutConstraint!
 
     var span: TimeInterval {
@@ -107,7 +122,20 @@ final class ChartView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        legend.stringValue = "■ Rest   " + windowLabel()
+        if collapsed {
+            // the header carries the live values while the plot is folded away
+            let last = samples.last
+            let a = NSMutableAttributedString()
+            func part(_ label: String, _ value: String, _ color: NSColor) {
+                a.append(NSAttributedString(string: label, attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor]))
+                a.append(NSAttributedString(string: value, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold), .foregroundColor: color]))
+            }
+            part("CPU ", last.map { "\(Int($0.cpu))%" } ?? "–", .controlAccentColor)
+            a.append(NSAttributedString(string: "   ·   ", attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.tertiaryLabelColor]))
+            part("Temp ", last?.temp.map { "\(Int($0.rounded()))°C" } ?? "n/a", .systemOrange)
+            legend.attributedStringValue = a
+            return
+        }
         legend.attributedStringValue = {
             let a = NSMutableAttributedString(string: "■ Rest    " + windowLabel(), attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
             a.addAttribute(.foregroundColor, value: NSColor.labelColor.withAlphaComponent(0.18), range: NSRange(location: 0, length: 1))
@@ -557,6 +585,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         caption.orientation = .horizontal; caption.spacing = 10
         progressWrap.setViews([progress, caption], in: .top)
         chart.isHidden = true
+        chart.collapsed = defaults.bool(forKey: "chartCollapsed")
+        chart.heightConstraint.constant = chart.targetHeight
+        chart.onToggle = { [weak self] in self?.toggleChart() }
         progressWrap.orientation = .vertical; progressWrap.alignment = .width; progressWrap.spacing = 4
 
         // Settings grid: labels on the left, field + unit flush right
@@ -669,7 +700,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     func animateChart(visible: Bool) {
         chartAnimation?.invalidate()
         let from = chart.isHidden ? 0 : chart.heightConstraint.constant
-        let to: CGFloat = visible ? chart.fullHeight : 0
+        let to: CGFloat = visible ? chart.targetHeight : 0
         if visible { chart.isHidden = false }
         let start = Date(), duration = 0.25
         chartAnimation = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
@@ -681,10 +712,26 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             self.layoutPanel()
             if p >= 1 {
                 timer.invalidate()
-                if !visible { self.chart.isHidden = true; self.chart.heightConstraint.constant = self.chart.fullHeight }
+                if !visible { self.chart.isHidden = true; self.chart.heightConstraint.constant = self.chart.targetHeight }
                 self.chart.alphaValue = 1
                 self.layoutPanel()
             }
+        }
+    }
+
+    func toggleChart() {
+        chart.collapsed.toggle()
+        defaults.set(chart.collapsed, forKey: "chartCollapsed")
+        chartAnimation?.invalidate()
+        let from = chart.heightConstraint.constant, to = chart.targetHeight
+        let start = Date(), duration = 0.22
+        chartAnimation = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
+            guard let self = self else { timer.invalidate(); return }
+            let p = min(1, Date().timeIntervalSince(start) / duration)
+            let eased = p < 0.5 ? 2 * p * p : 1 - pow(-2 * p + 2, 2) / 2
+            self.chart.heightConstraint.constant = from + (to - from) * CGFloat(eased)
+            self.layoutPanel()
+            if p >= 1 { timer.invalidate() }
         }
     }
 
