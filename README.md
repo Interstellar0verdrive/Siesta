@@ -40,7 +40,7 @@ Clicking the menu bar icon opens a popover with the current state, countdown and
 
 ### The panel in practice
 
-Expand **CPU & temperature** to see the recent history. The shaded bands mark scheduled rests: CPU usage falls while the worker is paused, and the temperature line shows how the Mac responds. CPU is shown as a share of the whole Mac, from 0% to 100%. The chart starts with a five-minute view, grows with the session, and then keeps a rolling six-hour history.
+Expand **CPU & temperature** to see the recent history. The shaded bands mark scheduled rests: CPU usage falls while the worker is paused, and the temperature line shows how the Mac responds. CPU is shown as a share of the whole Mac, from 0% to 100%. The chart starts with a five-minute view, grows with the session, and then keeps a rolling six-hour history. Pinch on the trackpad or scroll over the plot to zoom in on the recent part, down to 30 seconds and never beyond the recorded history; click **Reset** to return to the automatic view. Hovering over the plot shows the readings and the time of that moment.
 
 <a href="Resources/siesta-interface-expanded.png">
   <img src="Resources/siesta-interface-expanded.png" alt="Siesta popover in light and dark mode, with a 30-minute work interval, 12 minutes until the next rest, and the graph expanded to show CPU, temperature and shaded rest periods">
