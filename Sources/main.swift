@@ -1068,10 +1068,11 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     }
 
     // MARK: Loop
-    let sampleEvery: TimeInterval = 5
     func record(cpu: Double) {
         let t = Date.timeIntervalSinceReferenceDate
-        if let last = chart.samples.last?.t, t - last < sampleEvery - 0.5 { return }
+        // dense while the chart is still filling its first 5 minutes, then one point every 5 s
+        let every: TimeInterval = (chart.samples.first.map { t - $0.t } ?? 0) < chart.minWindow ? 1 : 5
+        if let last = chart.samples.last?.t, t - last < every - 0.5 { return }
         chart.samples.append(Sample(t: t, cpu: cpu, temp: thermometer.hottest(), resting: phase == .resting))
         chart.cpuMax = max(chart.cpuMax, ceil(cpu / 100) * 100)
         if let first = chart.samples.first?.t, t - first > chart.maxWindow + 60 {
