@@ -142,6 +142,18 @@ kill -CONT $(pgrep -x HandBrakeXPCService)
 
 <br>
 
+## What's next
+
+A few things I would like Siesta to do, in no particular order and with no dates attached:
+
+- **More apps.** Profiles for other long-running jobs, such as Tdarr or Topaz Video AI, chosen from a list of running programs.
+- **GPU in the chart.** Alongside CPU and temperature, where it says something meaningful about the encode.
+- **A thermal mode.** Rest when the chip has been above a chosen temperature for a while, instead of after a fixed number of minutes.
+
+Smaller refinements, such as a preferences page and a lighter footprint, will arrive along the way.
+
+<br>
+
 ## A note from the author
 
 Siesta started as a tool I built for myself, and it still is one. I am sharing it in case it is useful to someone else, with a few honest caveats:
