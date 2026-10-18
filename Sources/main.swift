@@ -298,13 +298,26 @@ func panelBlue(for view: NSView) -> NSColor {
 
 /// Thin progress line drawn with the panel blue.
 final class ProgressLine: NSView {
-    var value: Double = 0 { didSet { needsDisplay = true } }
+    /// Target value; the drawn value eases towards it over 300 ms (so the drop to zero is smooth too).
+    var value: Double = 0 { didSet { if value != oldValue { animate(to: value) } } }
+    private var shown: Double = 0 { didSet { needsDisplay = true } }
+    private var tween: Timer?
+    private func animate(to target: Double) {
+        tween?.invalidate()
+        let from = shown, start = Date()
+        tween = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] t in
+            let p = min(1, Date().timeIntervalSince(start) / 0.3)
+            let eased = p < 0.5 ? 2 * p * p : 1 - pow(-2 * p + 2, 2) / 2
+            self?.shown = from + (target - from) * eased
+            if p >= 1 { t.invalidate() }
+        }
+    }
     override var allowsVibrancy: Bool { false }
     override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: 4) }
     override func draw(_ dirtyRect: NSRect) {
         let track = NSBezierPath(roundedRect: bounds, xRadius: 2, yRadius: 2)
         NSColor.labelColor.withAlphaComponent(0.12).setFill(); track.fill()
-        let w = max(4, bounds.width * CGFloat(min(1, max(0, value))))
+        let w = max(4, bounds.width * CGFloat(min(1, max(0, shown))))
         panelBlue(for: self).setFill()
         NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: w, height: bounds.height), xRadius: 2, yRadius: 2).fill()
     }
@@ -1484,7 +1497,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             let total = workMinutes * 60
             let elapsed = min(workSeconds, total)
             let left = Int(ceil((total - elapsed) / 60))
-            progress.value = elapsed / total
+            // the bar runs until the planned pause, which comes early in the first cycle
+            let untilPause = max(0, (pausePlanned ?? Date().addingTimeInterval(total - elapsed)).timeIntervalSinceNow)
+            progress.value = isEncoding ? elapsed / max(1, elapsed + untilPause) : progress.value
             progressLabel.stringValue = "Work interval"
             progressDetail.stringValue = "\(Int(elapsed / 60)) of \(Int(workMinutes)) min elapsed"
             if isEncoding {
