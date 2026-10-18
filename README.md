@@ -36,23 +36,31 @@ Siesta keeps its status visible without crowding the menu bar. The cat changes t
   <img src="Resources/siesta-states-dark.png" alt="The four Siesta states: cycle stopped, working, resting, waiting">
 </picture>
 
-Clicking the menu bar icon opens a popover with the current state, countdown and interval progress. You can change Work and Rest minutes while the cycle runs; changes take effect immediately and appear in the activity log. In the two fields, the ↑ and ↓ keys step the value by one minute, by ten with Shift. **Stop cycle** stops Siesta's cycle, never the encoder.
+### The panel
 
-### The panel in practice
+Clicking the menu bar icon opens a popover with everything Siesta knows at that moment: the current state and a countdown to the next change, a thin progress line for the running interval, the Work and Rest minutes, the Start/Stop cycle button, a collapsible activity log and a Quit button. "Next pause at" and "Resumes at" show exact times, because pauses start on a whole minute and rests last exactly the minutes you set.
 
-Expand **CPU & temperature** to see the recent history. The shaded bands mark scheduled rests: CPU usage falls while the worker is paused, and the temperature line shows how the Mac responds. CPU is shown as a share of the whole Mac, from 0% to 100%. The chart starts with a five-minute view, grows with the session, and then keeps a rolling six-hour history. Pinch on the trackpad or scroll over the plot to zoom in on the recent part, down to 30 seconds and never beyond the recorded history; click **Reset** to return to the automatic view. Hovering over the plot shows the readings and the time of that moment.
+You can change Work and Rest while the cycle runs: the new value applies as soon as you confirm it with Return, Tab or a click elsewhere, and the change appears in the activity log. In the two fields, the ↑ and ↓ keys step the value by one minute, by ten with Shift. **Stop cycle** stops Siesta's cycle, never the encoder.
 
 <a href="Resources/siesta-interface-expanded.png">
   <img src="Resources/siesta-interface-expanded.png" alt="Siesta popover in light and dark mode, with a 30-minute work interval, 12 minutes until the next rest, and the graph expanded to show CPU, temperature and shaded rest periods">
 </a>
 
-Collapse the chart for just the current CPU and temperature readings. This keeps the popover short while preserving the countdown and controls.
+### The chart
+
+Expand **CPU & temperature** to see the recent history. The blue line is the encoder's CPU usage as a share of the whole Mac, from 0% to 100%; the orange line is the hottest CPU die. The shaded bands mark scheduled rests: CPU usage falls while the worker is paused, and the temperature line shows how the Mac responds.
+
+The chart starts with a five-minute view, grows with the session, and then keeps a rolling six-hour history. Hovering over the plot shows the readings and the time of that moment. Pinch on the trackpad or scroll over the plot to zoom in on the recent part, down to 30 seconds and never beyond the recorded history; click **Reset** to return to the automatic view.
+
+Collapse the chart with the chevron next to its title and the header keeps showing the current CPU and temperature readings. This keeps the popover short while preserving the countdown and controls. Siesta remembers whether you left the chart and the log open or closed.
 
 <a href="Resources/siesta-interface-compact.png">
   <img src="Resources/siesta-interface-compact.png" alt="Compact Siesta popover in light and dark mode, with the graph collapsed to live CPU and temperature readings">
 </a>
 
-Turn on **Detached window** to keep Siesta open as a regular window. Here the chart is collapsed and **Activity log** is expanded, showing recent pauses and resumes. Uncheck Detached window to return to the menu bar popover.
+### The detached window
+
+Turn on **Detached window** to keep Siesta open as a regular window that floats above your other apps, handy when you want to keep an eye on a long queue without reopening the popover. It holds exactly the same panel, with a little more room for the activity log. Here the chart is collapsed and **Activity log** is expanded, showing recent pauses and resumes. Uncheck Detached window to return to the menu bar popover.
 
 <a href="Resources/siesta-interface-detached.png">
   <img src="Resources/siesta-interface-detached.png" alt="Detached Siesta window in light and dark mode during a five-minute rest, with current CPU and temperature readings and the expanded activity log">
