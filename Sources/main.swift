@@ -314,10 +314,24 @@ final class LogTextView: NSTextView {
     override var acceptsFirstResponder: Bool { false }
 }
 
-/// Row that reports clicks to a closure.
+/// Row that reports clicks to a closure, with a light hover highlight and a hand cursor.
 final class ClickableRow: NSView {
     var onClick: (() -> Void)?
+    private var hovered = false { didSet { needsDisplay = true } }
     override func mouseDown(with event: NSEvent) { onClick?() }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil))
+    }
+    override func mouseEntered(with event: NSEvent) { hovered = true }
+    override func mouseExited(with event: NSEvent) { hovered = false }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+    override func draw(_ dirtyRect: NSRect) {
+        guard hovered else { return }
+        NSColor.labelColor.withAlphaComponent(0.05).setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: 7, yRadius: 7).fill()
+    }
 }
 
 /// The activity log box: a bordered container with a fully clickable header row
@@ -481,14 +495,24 @@ final class FlatButton: NSButton {
         let s = super.intrinsicContentSize
         return NSSize(width: s.width + (primary ? 28 : 24), height: primary ? 34 : 30)
     }
+    private var hovered = false { didSet { needsDisplay = true } }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil))
+    }
+    override func mouseEntered(with event: NSEvent) { hovered = true }
+    override func mouseExited(with event: NSEvent) { hovered = false }
     override var wantsUpdateLayer: Bool { true }
     override func updateLayer() {
         if primary {
-            layer?.backgroundColor = (isHighlighted ? NSColor.controlAccentColor.blended(withFraction: 0.2, of: .black) : NSColor.controlAccentColor)?.cgColor
+            let base = NSColor.controlAccentColor
+            let fill = isHighlighted ? base.blended(withFraction: 0.2, of: .black) : hovered ? base.blended(withFraction: 0.12, of: .white) : base
+            layer?.backgroundColor = fill?.cgColor
             layer?.borderColor = NSColor.white.withAlphaComponent(0.12).cgColor
         } else {
-            layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.14 : 0.08).cgColor
-            layer?.borderColor = NSColor.labelColor.withAlphaComponent(0.16).cgColor
+            layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.16 : hovered ? 0.12 : 0.08).cgColor
+            layer?.borderColor = NSColor.labelColor.withAlphaComponent(hovered ? 0.24 : 0.16).cgColor
         }
     }
     override var isHighlighted: Bool { didSet { needsDisplay = true } }
