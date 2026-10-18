@@ -70,8 +70,10 @@ final class ChartView: NSView {
     let headerRow = ClickableRow()
     let chevron = NSImageView()
     let header = NSTextField(labelWithString: "CPU & temperature")
-    let legend = NSTextField(labelWithString: "")
+    let legend = LinkButton(title: "", target: nil, action: nil)
     var onToggle: (() -> Void)?
+    /// Manual zoom span (nil = automatic window). Pinch or scroll over the plot sets it; "Reset" clears it.
+    var zoomSpan: TimeInterval? { didSet { needsDisplay = true } }
     var collapsed = false { didSet { chevron.image = NSImage(systemSymbolName: collapsed ? "chevron.right" : "chevron.down", accessibilityDescription: collapsed ? "Expand chart" : "Collapse chart"); needsDisplay = true } }
 
     init() {
@@ -79,8 +81,10 @@ final class ChartView: NSView {
         chevron.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
         chevron.contentTintColor = .secondaryLabelColor
         header.font = .systemFont(ofSize: 13, weight: .semibold)
-        legend.font = .systemFont(ofSize: 11); legend.textColor = .secondaryLabelColor
-        legend.alignment = .right
+        legend.isBordered = false
+        legend.isEnabled = false
+        legend.target = self; legend.action = #selector(resetZoom)
+        legend.setContentHuggingPriority(.required, for: .horizontal)
         let titleRow = NSStackView(views: [chevron, header]); titleRow.orientation = .horizontal; titleRow.spacing = 6
         titleRow.translatesAutoresizingMaskIntoConstraints = false
         headerRow.addSubview(titleRow)
@@ -123,6 +127,27 @@ final class ChartView: NSView {
         hoverT = min(t, last.t)
     }
     override func mouseExited(with event: NSEvent) { hoverT = nil }
+
+    @objc func resetZoom() { zoomSpan = nil; legend.isEnabled = false; window?.invalidateCursorRects(for: legend) }
+
+    /// Longest span that has data: nothing to zoom into beyond what was recorded.
+    var availableSpan: TimeInterval {
+        guard let first = samples.first?.t, let last = samples.last?.t else { return minWindow }
+        return min(maxWindow, max(minWindow, last - first))
+    }
+    private func zoom(by factor: Double) {
+        guard !collapsed, availableSpan > minWindow + 1 else { return }
+        let current = zoomSpan ?? (range.end - range.start)
+        let next = min(availableSpan, max(minWindow, current * factor))
+        zoomSpan = next
+        legend.isEnabled = true
+        window?.invalidateCursorRects(for: legend)
+    }
+    override func scrollWheel(with event: NSEvent) {
+        guard geom != nil, abs(event.scrollingDeltaY) > 0.5 else { return }
+        zoom(by: event.scrollingDeltaY > 0 ? 1.08 : 1 / 1.08)
+    }
+    override func magnify(with event: NSEvent) { zoom(by: 1 / max(0.2, 1 + event.magnification)) }
     let fullHeight: CGFloat = 140
     let collapsedHeight: CGFloat = 18
     var targetHeight: CGFloat { collapsed ? collapsedHeight : fullHeight }
@@ -136,6 +161,7 @@ final class ChartView: NSView {
     /// reaches 6 hours, then slides so the newest sample stays at the right edge.
     var range: (start: TimeInterval, end: TimeInterval) {
         guard let first = samples.first?.t, let last = samples.last?.t else { let n = Date.timeIntervalSinceReferenceDate; return (n - minWindow, n) }
+        if let z = zoomSpan { return (last - min(z, max(minWindow, last - first)), last) }
         if last - first >= maxWindow { return (last - maxWindow, last) }
         return (first, first + max(minWindow, last - first))
     }
@@ -164,12 +190,17 @@ final class ChartView: NSView {
             part("CPU ", last.map { "\(Int($0.cpu))%" } ?? "–", .labelColor)
             a.append(NSAttributedString(string: "   ·   ", attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.tertiaryLabelColor]))
             part("Temp ", last?.temp.map { "\(Int($0.rounded()))°C" } ?? "n/a", .labelColor)
-            legend.attributedStringValue = a
+            legend.attributedTitle = a
             return
         }
-        legend.attributedStringValue = {
-            let a = NSMutableAttributedString(string: "■ Rest    " + windowLabel(), attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
+        legend.attributedTitle = {
+            let a = NSMutableAttributedString(string: "■ Rest    ", attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
             a.addAttribute(.foregroundColor, value: NSColor.labelColor.withAlphaComponent(0.18), range: NSRange(location: 0, length: 1))
+            if zoomSpan != nil {
+                a.append(NSAttributedString(string: "Reset", attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.labelColor, .underlineStyle: NSUnderlineStyle.single.rawValue]))
+            } else {
+                a.append(NSAttributedString(string: windowLabel(), attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor]))
+            }
             return a
         }()
         guard let last = samples.last else { return }
