@@ -36,7 +36,7 @@ Siesta keeps its status visible without crowding the menu bar. The cat changes t
   <img src="Resources/siesta-states-dark.png" alt="The four Siesta states: cycle stopped, working, resting, waiting">
 </picture>
 
-Clicking the menu bar icon opens a popover with the current state, countdown and interval progress. You can change Work and Rest minutes while the cycle runs; changes take effect immediately and appear in the activity log. **Stop cycle** stops Siesta's cycle, never the encoder.
+Clicking the menu bar icon opens a popover with the current state, countdown and interval progress. You can change Work and Rest minutes while the cycle runs; changes take effect immediately and appear in the activity log. In the two fields, the ↑ and ↓ keys step the value by one minute, by ten with Shift. **Stop cycle** stops Siesta's cycle, never the encoder.
 
 ### The panel in practice
 
