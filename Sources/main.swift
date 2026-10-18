@@ -158,7 +158,7 @@ final class ChartView: NSView {
         }
     }
     private var viewTween: Timer?
-    /// Glides the view to a target over 1.2 s with ease-in-out, then runs `done`.
+    /// Glides the view to a target over 0.8 s with ease-in-out, then runs `done`.
     private func animateView(toStart: TimeInterval, toSpan: TimeInterval, done: @escaping () -> Void) {
         viewTween?.invalidate()
         let (s0, e0) = range
@@ -167,7 +167,7 @@ final class ChartView: NSView {
         markCustom()
         viewTween = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] t in
             guard let self = self else { t.invalidate(); return }
-            let p = min(1, Date().timeIntervalSince(t0) / 1.2)
+            let p = min(1, Date().timeIntervalSince(t0) / 0.8)
             let e = p < 0.5 ? 2 * p * p : 1 - pow(-2 * p + 2, 2) / 2
             self.view = (fromStart + (toStart - fromStart) * e, fromSpan + (toSpan - fromSpan) * e)
             if p >= 1 { t.invalidate(); done() }
