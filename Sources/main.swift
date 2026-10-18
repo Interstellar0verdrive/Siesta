@@ -85,6 +85,8 @@ final class ChartView: NSView {
         titleRow.translatesAutoresizingMaskIntoConstraints = false
         headerRow.addSubview(titleRow)
         headerRow.onClick = { [weak self] in self?.onToggle?() }
+        headerRow.highlightsBackground = false
+        headerRow.onHover = { [weak self] on in self?.chevron.alphaValue = on ? 0.6 : 1; self?.header.alphaValue = on ? 0.6 : 1 }
         for v in [headerRow, legend] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
         NSLayoutConstraint.activate([
             titleRow.leadingAnchor.constraint(equalTo: headerRow.leadingAnchor), titleRow.trailingAnchor.constraint(equalTo: headerRow.trailingAnchor),
@@ -317,7 +319,9 @@ final class LogTextView: NSTextView {
 /// Row that reports clicks to a closure, with a light hover highlight and a hand cursor.
 final class ClickableRow: NSView {
     var onClick: (() -> Void)?
-    private var hovered = false { didSet { needsDisplay = true } }
+    var onHover: ((Bool) -> Void)?
+    var highlightsBackground = true
+    private var hovered = false { didSet { needsDisplay = true; onHover?(hovered) } }
     override func mouseDown(with event: NSEvent) { onClick?() }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -328,7 +332,7 @@ final class ClickableRow: NSView {
     override func mouseExited(with event: NSEvent) { hovered = false }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
     override func draw(_ dirtyRect: NSRect) {
-        guard hovered else { return }
+        guard hovered, highlightsBackground else { return }
         NSColor.labelColor.withAlphaComponent(0.05).setFill()
         NSBezierPath(roundedRect: bounds, xRadius: 7, yRadius: 7).fill()
     }
@@ -503,11 +507,12 @@ final class FlatButton: NSButton {
     }
     override func mouseEntered(with event: NSEvent) { hovered = true }
     override func mouseExited(with event: NSEvent) { hovered = false }
+    override func resetCursorRects() { if isEnabled { addCursorRect(bounds, cursor: .pointingHand) } }
     override var wantsUpdateLayer: Bool { true }
     override func updateLayer() {
         if primary {
             let base = NSColor.controlAccentColor
-            let fill = isHighlighted ? base.blended(withFraction: 0.2, of: .black) : hovered ? base.blended(withFraction: 0.12, of: .white) : base
+            let fill = isHighlighted ? base.blended(withFraction: 0.2, of: .black) : hovered ? base.blended(withFraction: 0.06, of: .white) : base
             layer?.backgroundColor = fill?.cgColor
             layer?.borderColor = NSColor.white.withAlphaComponent(0.12).cgColor
         } else {
