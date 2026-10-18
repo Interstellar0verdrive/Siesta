@@ -21,6 +21,11 @@ let target = Target(name: "HandBrake", bundleMarker: "HandBrake.app/", workerMar
 let popoverWidth: CGFloat = 380
 let windowWidth: CGFloat = 490
 
+/// Image view that keeps its real colour inside a popover (no vibrancy blending).
+final class SolidImageView: NSImageView {
+    override var allowsVibrancy: Bool { false }
+}
+
 /// Panel background: a click on empty space drops focus from a text field and commits its value.
 final class BackgroundView: NSView {
     override func mouseDown(with event: NSEvent) { window?.makeFirstResponder(nil) }
@@ -223,7 +228,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     var window: NSWindow?
     var panelWidth: NSLayoutConstraint!
 
-    let statusSymbol = NSImageView()
+    let statusSymbol = SolidImageView()
     let statusTitle = NSTextField(labelWithString: "")
     let statusSubtitle = NSTextField(labelWithString: "")
     let countdown = NSTextField(labelWithString: "")
@@ -244,6 +249,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     var updateSha: URL?
     var updateVersion = ""
     var updating = false
+    var announcedThisRun = ""
     var logView: NSTextView { logBox.list }
     var logExpanded = false
     var logCount = 0
@@ -624,8 +630,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
     /// Mentions a new release once per version: the footer link alone is easy to miss.
     func announceUpdate(_ version: String) {
-        guard defaults.string(forKey: "announced") != version else { return }
-        defaults.set(version, forKey: "announced")
+        guard announcedThisRun != version else { return }   // once per launch; "Later" means next launch
+        announcedThisRun = version
         let alert = NSAlert()
         alert.icon = App.appArtwork()
         alert.messageText = "Siesta \(version) is available"
