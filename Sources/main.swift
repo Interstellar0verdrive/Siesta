@@ -850,7 +850,6 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in self?.checkForUpdate() }
         refresh()
         if CommandLine.arguments.contains("--start") { toggleRun() }
-        }
         if CommandLine.arguments.contains("--auto-update") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in self?.openUpdate() }
         }
