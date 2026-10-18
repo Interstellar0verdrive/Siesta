@@ -18,6 +18,8 @@ Siesta counts the minutes the encoder has **actually** been working, then pauses
   <img src="Resources/siesta-hero-dark.png" alt="Siesta in the macOS menu bar: HandBrake is working, with 12 minutes until the next pause, 18 of 30 work minutes elapsed, and recent CPU and temperature history">
 </picture>
 
+<br>
+
 ## How it works
 
 - Every second Siesta looks at the processes that belong to HandBrake and adds up their CPU usage. HandBrake does the real encoding in a separate XPC worker: that is what Siesta pauses, so the HandBrake window stays responsive. If no worker can be identified, Siesta falls back to pausing the HandBrake processes it found.
@@ -26,6 +28,7 @@ Siesta counts the minutes the encoder has **actually** been working, then pauses
 - If HandBrake stays idle for at least the rest duration, the work counter resets: it already had its rest.
 - Stopping or quitting Siesta always resumes a frozen worker first.
 
+<br>
 
 ## Four states. One familiar face.
 #### The cat tells you what Siesta is doing, right from the menu bar.
@@ -38,6 +41,7 @@ It changes to show whether the cycle is stopped, HandBrake is encoding, taking a
   <img src="Resources/siesta-states-dark.png" alt="The four Siesta states: cycle stopped, working, resting, waiting">
 </picture>
 
+<br>
 
 ## The panel
 #### Everything Siesta knows, one click away.
@@ -50,6 +54,7 @@ You can change Work and Rest while the cycle runs: the new value applies as soon
   <img src="Resources/siesta-interface-compact.png" alt="Compact Siesta popover in light and dark mode, with the graph collapsed to live CPU and temperature readings">
 </a>
 
+<br>
 
 ## See the cycle unfold
 #### Open the graph to follow CPU load, temperature and scheduled rests.
@@ -64,6 +69,7 @@ Collapse the chart with the chevron next to its title and the header keeps showi
   <img src="Resources/siesta-interface-expanded.png" alt="Siesta popover in light and dark mode, with a 30-minute work interval, 12 minutes until the next rest, and the graph expanded to show CPU, temperature and shaded rest periods">
 </a>
 
+<br>
 
 ## A window when you need one
 #### Detach the panel and open the activity log.
@@ -74,6 +80,7 @@ Turn on **Detached window** to keep Siesta open as a regular window that floats 
   <img src="Resources/siesta-interface-detached.png" alt="Detached Siesta window in light and dark mode during a five-minute rest, with current CPU and temperature readings and the expanded activity log">
 </a>
 
+<br>
 
 ## A little about the name
 
@@ -81,6 +88,7 @@ Siesta takes its name from the afternoon nap. The cat curled up beneath a warm s
 
 ![The Siesta icon in its light and dark variants: a cat asleep in front of the sun](Resources/siesta-icon-showcase.png)
 
+<br>
 
 ## Download
 
@@ -92,12 +100,15 @@ Siesta is signed ad hoc and is not notarized, so macOS blocks the first launch w
 xattr -d com.apple.quarantine /Applications/Siesta.app
 ```
 
+<br>
+
 ## Updates
 
 The current version is shown in small print next to the Quit button. While Siesta is running it asks GitHub for the latest release at launch and then every six hours; nothing runs while the app is closed.
 
 When a newer release exists the version turns into an **Update to x.y.z** link. Clicking it downloads the release archive, verifies its SHA-256 checksum against the one published with the release, replaces the app in place (the old copy goes to the Trash) and relaunches. Because the new bundle is written by Siesta itself it carries no quarantine flag, so macOS does not ask for approval again: only the very first installation needs it. If the app lives in a folder Siesta cannot write to, or anything goes wrong, the link simply opens the release page instead.
 
+<br>
 
 ## Building
 
@@ -111,11 +122,13 @@ The app is produced at `build/Siesta.app` as a universal binary; `./build.sh --z
 
 Launching the binary with `--start` starts the cycle immediately with the last saved values.
 
+<br>
 
 ## Preferences
 
 Stored in the `io.github.interstellar0verdrive.siesta` defaults domain: `work`, `rest` (minutes), `window` (detached window), `threshold` (CPU percentage considered "encoding", default 50, not exposed in the UI).
 
+<br>
 
 ## Is pausing safe for the files?
 
@@ -127,6 +140,8 @@ Siesta resumes a frozen worker when you stop the cycle, quit, or when it receive
 kill -CONT $(pgrep -x HandBrakeXPCService)
 ```
 
+<br>
+
 ## A note from the author
 
 Siesta started as a tool I built for myself, and it still is one. I am sharing it in case it is useful to someone else, with a few honest caveats:
@@ -137,6 +152,8 @@ Siesta started as a tool I built for myself, and it still is one. I am sharing i
 - **macOS only.** Siesta relies on macOS features and there are no plans for a Windows or Linux version.
 
 Thank you for trying it. I hope it gives your Mac, and you, a well-deserved rest.
+
+<br>
 
 ## License
 
