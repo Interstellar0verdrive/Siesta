@@ -131,6 +131,12 @@ final class ChartView: NSView {
     }
     override func mouseExited(with event: NSEvent) { hoverT = nil }
     func visibleSamples(_ a: TimeInterval, _ b: TimeInterval) -> [Sample] { samples.filter { $0.t >= a && $0.t <= b } }
+    /// Where a view of width `z` may start: data wider than the view must fill it; data narrower
+    /// than the view may float, as long as at least a minute of it stays visible.
+    func startBounds(_ z: TimeInterval) -> (lo: TimeInterval, hi: TimeInterval) {
+        guard let first = samples.first?.t, let last = samples.last?.t else { return (0, 0) }
+        return z <= last - first ? (first, last - z) : (last - z, last - minZoom)
+    }
 
     @objc func resetZoom() {
         guard let first = samples.first?.t, let last = samples.last?.t else { return }
@@ -164,7 +170,7 @@ final class ChartView: NSView {
         guard let first = samples.first?.t, let last = samples.last?.t else { return }
         let (start, end) = range
         let span = end - start
-        let lo = min(first, last - span), hi = max(first, last - span)
+        let (lo, hi) = startBounds(span)
         let newStart = min(hi, max(lo, start + dt))
         let following = span <= last - first ? newStart + span >= last - 0.5 : newStart <= first + 0.5
         viewEnd = following ? nil : newStart + span
@@ -220,7 +226,7 @@ final class ChartView: NSView {
         // keep the time under the cursor where it is
         let pivot = anchor ?? end
         let frac = (pivot - start) / current
-        let lo = min(first, last - next), hi = max(first, last - next)
+        let (lo, hi) = startBounds(next)
         let newStart = min(hi, max(lo, pivot - frac * next))
         zoomSpan = next
         let following = next <= last - first ? newStart + next >= last - 0.5 : newStart <= first + 0.5
@@ -262,7 +268,7 @@ final class ChartView: NSView {
         guard let first = samples.first?.t, let last = samples.last?.t else { let n = Date.timeIntervalSinceReferenceDate; return (n - minWindow, n) }
         if let z = zoomSpan {
             // allowed starts: data narrower than the view may float inside it, wider data must fill it
-            let lo = min(first, last - z), hi = max(first, last - z)
+            let (lo, hi) = startBounds(z)
             let start: TimeInterval
             if let e = viewEnd { start = min(hi, max(lo, e - z)) }
             else { start = z <= last - first ? last - z : first }     // following now: newest at the right, or left-anchored
