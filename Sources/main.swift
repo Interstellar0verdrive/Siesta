@@ -263,17 +263,18 @@ final class ChartView: NSView {
             hdot(hv.cpu, lane: cpuLane, maxV: cpuMax, minV: 0, cpuColor)
             if let t = hv.temp { hdot(t, lane: tempLane, maxV: tMax, minV: tMin, tempColor) }
         }
-        // time axis: at most 4 labels (6 in the wider window) plus "Now"; a label never overlaps "Now"
-        let maxTicks = bounds.width > 420 ? 6 : 4
-        let steps: [TimeInterval] = [60, 120, 300, 600, 900, 1800, 3600, 7200]
-        let step = steps.first { w / $0 <= Double(maxTicks) } ?? 7200
+        // time axis: the start time flush left, "Now" at the right, the others spread evenly in between
+        let labelCount = bounds.width > 420 ? 6 : 4
         let f = DateFormatter(); f.dateFormat = "HH:mm"
         let hx: CGFloat? = hovered.map { x($0.t) }
-        var tick = (floor(tStart / step) + 1) * step
-        while tick <= last.t {                       // only times that have already passed
-            let tx = x(tick)
-            if nx - tx > 44 && (hx.map { abs($0 - tx) > 40 } ?? true) { text(f.string(from: Date(timeIntervalSinceReferenceDate: tick)), NSPoint(x: tx - 16, y: 7), .secondaryLabelColor) }
-            tick += step
+        let shownSpan = last.t - tStart
+        for i in 0..<labelCount {
+            let t = tStart + shownSpan * Double(i) / Double(labelCount)
+            let tx = x(t)
+            guard nx - tx > 44, hx.map({ abs($0 - tx) > 40 }) ?? true else { continue }
+            let label = f.string(from: Date(timeIntervalSinceReferenceDate: t))
+            let lw = NSAttributedString(string: label, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)]).size().width
+            text(label, NSPoint(x: i == 0 ? plotLeft : tx - lw / 2, y: 7), .secondaryLabelColor)
         }
         if let hv = hovered, let hx = hx {
             let label = f.string(from: Date(timeIntervalSinceReferenceDate: hv.t))
