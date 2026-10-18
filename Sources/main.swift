@@ -252,6 +252,12 @@ final class ChartView: NSView {
         let pivot = anchor ?? end
         let frac = (pivot - start) / current
         let newStart = clampStart(pivot - frac * next, span: next)
+        // back at the automatic view: drop the custom view, so "Reset" gives way to "Past …"
+        if abs(next - autoWidth) < 0.5 && tracksNow(start: newStart, span: next) {
+            view = nil; followNow = true
+            legend.isEnabled = false; window?.invalidateCursorRects(for: legend)
+            return
+        }
         view = (newStart, next)
         followNow = tracksNow(start: newStart, span: next)
         markCustom()
