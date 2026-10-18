@@ -42,8 +42,8 @@ Clicking the menu bar icon opens a popover with everything Siesta knows at that 
 
 You can change Work and Rest while the cycle runs: the new value applies as soon as you confirm it with Return, Tab or a click elsewhere, and the change appears in the activity log. In the two fields, the ↑ and ↓ keys step the value by one minute, by ten with Shift. **Stop cycle** stops Siesta's cycle, never the encoder.
 
-<a href="Resources/siesta-interface-expanded.png">
-  <img src="Resources/siesta-interface-expanded.png" alt="Siesta popover in light and dark mode, with a 30-minute work interval, 12 minutes until the next rest, and the graph expanded to show CPU, temperature and shaded rest periods">
+<a href="Resources/siesta-interface-compact.png">
+  <img src="Resources/siesta-interface-compact.png" alt="Compact Siesta popover in light and dark mode, with the graph collapsed to live CPU and temperature readings">
 </a>
 
 ### The chart
@@ -52,10 +52,10 @@ Expand **CPU & temperature** to see the recent history. The blue line is the enc
 
 The chart starts with a five-minute view, grows with the session, and then keeps a rolling six-hour history. Hovering over the plot shows the readings and the time of that moment. Pinch on the trackpad or scroll over the plot to zoom in on the recent part, down to 30 seconds and never beyond the recorded history; click **Reset** to return to the automatic view.
 
-Collapse the chart with the chevron next to its title and the header keeps showing the current CPU and temperature readings. This keeps the popover short while preserving the countdown and controls. Siesta remembers whether you left the chart and the log open or closed.
+Collapse the chart with the chevron next to its title and the header keeps showing the current CPU and temperature readings, as in the compact view above. Siesta remembers whether you left the chart and the log open or closed.
 
-<a href="Resources/siesta-interface-compact.png">
-  <img src="Resources/siesta-interface-compact.png" alt="Compact Siesta popover in light and dark mode, with the graph collapsed to live CPU and temperature readings">
+<a href="Resources/siesta-interface-expanded.png">
+  <img src="Resources/siesta-interface-expanded.png" alt="Siesta popover in light and dark mode, with a 30-minute work interval, 12 minutes until the next rest, and the graph expanded to show CPU, temperature and shaded rest periods">
 </a>
 
 ### The detached window
