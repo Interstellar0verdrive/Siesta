@@ -130,8 +130,33 @@ final class ChartView: NSView {
         hoverT = min(t, min(last.t, range.end))
     }
     override func mouseExited(with event: NSEvent) { hoverT = nil }
+    func visibleSamples(_ a: TimeInterval, _ b: TimeInterval) -> [Sample] { samples.filter { $0.t >= a && $0.t <= b } }
 
-    @objc func resetZoom() { zoomSpan = nil; viewEnd = nil; legend.isEnabled = false; window?.invalidateCursorRects(for: legend) }
+    @objc func resetZoom() {
+        guard let first = samples.first?.t, let last = samples.last?.t else { return }
+        let autoSpan = last - first >= maxWindow ? maxWindow : max(minWindow, last - first)
+        let autoEnd = last - first >= maxWindow ? last : first + autoSpan
+        animateView(toSpan: autoSpan, toEnd: autoEnd) { [weak self] in
+            self?.zoomSpan = nil; self?.viewEnd = nil
+            self?.legend.isEnabled = false; self?.window?.invalidateCursorRects(for: self!.legend)
+        }
+    }
+    private var viewTween: Timer?
+    /// Glides span and right edge to a target over 1.2 s with ease-in-out, then runs `done`.
+    private func animateView(toSpan: TimeInterval, toEnd: TimeInterval, done: @escaping () -> Void) {
+        viewTween?.invalidate()
+        let (s0, e0) = range
+        let fromSpan = e0 - s0, fromEnd = e0, start = Date()
+        legend.isEnabled = true; window?.invalidateCursorRects(for: legend)
+        viewTween = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] t in
+            guard let self = self else { t.invalidate(); return }
+            let p = min(1, Date().timeIntervalSince(start) / 1.2)
+            let e = p < 0.5 ? 2 * p * p : 1 - pow(-2 * p + 2, 2) / 2
+            self.zoomSpan = fromSpan + (toSpan - fromSpan) * e
+            self.viewEnd = fromEnd + (toEnd - fromEnd) * e
+            if p >= 1 { t.invalidate(); done() }
+        }
+    }
     private func markCustom() { legend.isEnabled = true; window?.invalidateCursorRects(for: legend) }
 
     /// Shifts the view by a time delta, clamped to the recorded history; back at the right edge it follows Now again.
@@ -147,12 +172,16 @@ final class ChartView: NSView {
     private var dragLastX: CGFloat?
     private var leftArrowRect = NSRect.zero, rightArrowRect = NSRect.zero
     /// Jump to the newest data keeping the current zoom.
-    func goToNow() { viewEnd = nil; if zoomSpan == nil { legend.isEnabled = false; window?.invalidateCursorRects(for: legend) } }
+    func goToNow() {
+        guard let last = samples.last?.t else { return }
+        let span = range.end - range.start
+        animateView(toSpan: span, toEnd: last) { [weak self] in self?.viewEnd = nil; self?.markCustom() }
+    }
     /// Jump to the beginning of the recorded history keeping the current zoom.
     func goToStart() {
         guard let first = samples.first?.t else { return }
         let span = range.end - range.start
-        viewEnd = first + span; markCustom()
+        animateView(toSpan: span, toEnd: first + span) { [weak self] in self?.markCustom() }
     }
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
@@ -182,10 +211,11 @@ final class ChartView: NSView {
         return min(maxWindow, last - first)
     }
     private func zoom(by factor: Double, at anchor: TimeInterval?) {
-        guard !collapsed, availableSpan > minZoom, let first = samples.first?.t, let last = samples.last?.t else { return }
+        guard !collapsed, let first = samples.first?.t, let last = samples.last?.t, last - first > 5 else { return }
         let (start, end) = range
         let current = end - start
-        let next = min(availableSpan, max(minZoom, current * factor))
+        let widest = max(availableSpan, current)                 // never wider than data, unless already shown
+        let next = min(widest, max(minZoom, current * factor))
         // keep the time under the cursor where it is
         let pivot = anchor ?? end
         let frac = (pivot - start) / current
@@ -210,7 +240,7 @@ final class ChartView: NSView {
         } else if !event.hasPreciseScrollingDeltas {
             // mouse wheel: zoom around the cursor
             guard abs(dy) > 0.5 else { return }
-            zoom(by: dy > 0 ? 1.08 : 1 / 1.08, at: timeAt(event))
+            zoom(by: dy > 0 ? 1.04 : 1 / 1.04, at: timeAt(event))
         }
         // vertical two-finger scroll is left to the page
     }
@@ -229,7 +259,10 @@ final class ChartView: NSView {
     var range: (start: TimeInterval, end: TimeInterval) {
         guard let first = samples.first?.t, let last = samples.last?.t else { let n = Date.timeIntervalSinceReferenceDate; return (n - minWindow, n) }
         let end = min(last, viewEnd ?? last)
-        if let z = zoomSpan { return (end - min(z, max(minZoom, last - first)), end) }
+        if let z = zoomSpan {
+            if last - first <= z { return (first, first + z) }      // data shorter than the view: keep it left-anchored
+            return (end - z, end)
+        }
         if viewEnd != nil { let w = min(maxWindow, max(minWindow, last - first)); return (max(first, end - w), end) }
         if last - first >= maxWindow { return (last - maxWindow, last) }
         return (first, first + max(minWindow, last - first))
@@ -285,7 +318,7 @@ final class ChartView: NSView {
         geom = (plotLeft, plotRight, tStart, w, plotsBottom, plotsTop)
         func x(_ t: TimeInterval) -> CGFloat { plotLeft + CGFloat((t - tStart) / w) * plotW }
         // the sample under the cursor, if any: it takes over the right-hand values and the axis
-        let hovered: Sample? = hoverT.flatMap { ht in samples.min { abs($0.t - ht) < abs($1.t - ht) } }
+        let hovered: Sample? = hoverT.flatMap { ht in visibleSamples(tStart, tEnd).min { abs($0.t - ht) < abs($1.t - ht) } }
             .flatMap { abs($0.t - hoverT!) < 30 ? $0 : nil }
 
         NSGraphicsContext.saveGraphicsState()
