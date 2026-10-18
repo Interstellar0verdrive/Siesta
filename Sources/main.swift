@@ -79,10 +79,13 @@ final class ChartView: NSView {
         NSLayoutConstraint.activate([
             header.leadingAnchor.constraint(equalTo: leadingAnchor), header.topAnchor.constraint(equalTo: topAnchor),
             legend.trailingAnchor.constraint(equalTo: trailingAnchor), legend.firstBaselineAnchor.constraint(equalTo: header.firstBaselineAnchor),
-            heightAnchor.constraint(equalToConstant: 200),
         ])
+        heightConstraint = heightAnchor.constraint(equalToConstant: fullHeight)
+        heightConstraint.isActive = true
     }
     required init?(coder: NSCoder) { fatalError() }
+    let fullHeight: CGFloat = 200
+    var heightConstraint: NSLayoutConstraint!
 
     var span: TimeInterval {
         guard let first = samples.first?.t, let last = samples.last?.t else { return minWindow }
@@ -111,7 +114,7 @@ final class ChartView: NSView {
             return a
         }()
         guard let last = samples.last else { return }
-        let plotLeft: CGFloat = 52, plotRight = bounds.width - 62, top = bounds.height - 30, axisH: CGFloat = 20
+        let plotLeft: CGFloat = 46, plotRight = bounds.width - 48, top = bounds.height - 30, axisH: CGFloat = 20
         let plotW = plotRight - plotLeft
         let plotsTop = top, plotsBottom = axisH
         let gap: CGFloat = 14
@@ -133,10 +136,10 @@ final class ChartView: NSView {
                 restStart = nil
             }
         }
-        // baselines
-        NSColor.separatorColor.setStroke()
-        for lane in [cpuLane, tempLane] {
-            let b = NSBezierPath(); b.move(to: NSPoint(x: lane.minX, y: lane.minY)); b.line(to: NSPoint(x: lane.maxX, y: lane.minY)); b.lineWidth = 1; b.stroke()
+        // divider between the lanes and baseline above the time axis
+        NSColor.labelColor.withAlphaComponent(0.22).setStroke()
+        for y in [cpuLane.minY - gap / 2, tempLane.minY] {
+            let b = NSBezierPath(); b.move(to: NSPoint(x: plotLeft, y: y)); b.line(to: NSPoint(x: plotRight, y: y)); b.lineWidth = 1; b.stroke()
         }
         // lines, one point per pixel column (mean of the samples in that column)
         let visible = samples.filter { $0.t >= tStart }
@@ -184,12 +187,15 @@ final class ChartView: NSView {
         text("Temp", NSPoint(x: 0, y: tempLane.midY), .systemOrange, .semibold)
         text("\(Int(last.cpu))%", NSPoint(x: bounds.width, y: cpuLane.midY), .controlAccentColor, .semibold, right: true)
         text(last.temp.map { "\(Int($0.rounded()))°C" } ?? "n/a", NSPoint(x: bounds.width, y: tempLane.midY), .systemOrange, .semibold, right: true)
-        // time axis: ticks at round times, "Now" at the right end
-        let step: TimeInterval = w <= 10 * 60 ? 60 : w <= 3600 ? 15 * 60 : w <= 3 * 3600 ? 30 * 60 : 3600
+        // time axis: at most 4 labels (6 in the wider window) plus "Now"; a label never overlaps "Now"
+        let maxTicks = bounds.width > 420 ? 6 : 4
+        let steps: [TimeInterval] = [60, 120, 300, 600, 900, 1800, 3600, 7200]
+        let step = steps.first { w / $0 <= Double(maxTicks) } ?? 7200
         let f = DateFormatter(); f.dateFormat = "HH:mm"
         var tick = (floor(tStart / step) + 1) * step
-        while tick < last.t - step * 0.35 {
-            text(f.string(from: Date(timeIntervalSinceReferenceDate: tick)), NSPoint(x: x(tick) - 16, y: 7), .secondaryLabelColor)
+        while tick <= tEnd {
+            let tx = x(tick)
+            if abs(tx - nx) > 44 { text(f.string(from: Date(timeIntervalSinceReferenceDate: tick)), NSPoint(x: tx - 16, y: 7), .secondaryLabelColor) }
             tick += step
         }
         text("Now", NSPoint(x: nx + 14, y: 7), .secondaryLabelColor, .medium, right: true)
@@ -656,6 +662,30 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         showPlaceholder()
         popover.behavior = .transient
         popover.animates = true
+    }
+
+    /// Grows or shrinks the chart (and the panel with it) over a quarter of a second.
+    var chartAnimation: Timer?
+    func animateChart(visible: Bool) {
+        chartAnimation?.invalidate()
+        let from = chart.isHidden ? 0 : chart.heightConstraint.constant
+        let to: CGFloat = visible ? chart.fullHeight : 0
+        if visible { chart.isHidden = false }
+        let start = Date(), duration = 0.25
+        chartAnimation = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
+            guard let self = self else { timer.invalidate(); return }
+            let p = min(1, Date().timeIntervalSince(start) / duration)
+            let eased = p < 0.5 ? 2 * p * p : 1 - pow(-2 * p + 2, 2) / 2
+            self.chart.heightConstraint.constant = from + (to - from) * CGFloat(eased)
+            self.chart.alphaValue = visible ? CGFloat(p) : CGFloat(1 - p)
+            self.layoutPanel()
+            if p >= 1 {
+                timer.invalidate()
+                if !visible { self.chart.isHidden = true; self.chart.heightConstraint.constant = self.chart.fullHeight }
+                self.chart.alphaValue = 1
+                self.layoutPanel()
+            }
+        }
     }
 
     /// Recomputes the panel size after a layout change (log toggled, mode switched).
@@ -1180,8 +1210,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let hideProgress = phase == .stopped
         if progressWrap.isHidden != hideProgress {
             progressWrap.isHidden = hideProgress
-            chart.isHidden = hideProgress
-            layoutPanel()          // the panel height changed
+            animateChart(visible: !hideProgress)
         }
         switch phase {
         case .stopped:
