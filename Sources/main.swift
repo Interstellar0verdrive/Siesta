@@ -98,6 +98,23 @@ final class ChartView: NSView {
     }
     required init?(coder: NSCoder) { fatalError() }
     override var allowsVibrancy: Bool { false }   // keep real colours inside the popover
+
+    // hover: time under the cursor, or nil
+    var hoverT: TimeInterval? { didSet { if hoverT != oldValue { needsDisplay = true } } }
+    private var geom: (left: CGFloat, right: CGFloat, start: TimeInterval, span: TimeInterval)?
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil))
+    }
+    override func mouseMoved(with event: NSEvent) {
+        guard !collapsed, let g = geom, let last = samples.last else { hoverT = nil; return }
+        let p = convert(event.locationInWindow, from: nil)
+        guard p.x >= g.left - 4, p.x <= g.right + 4, p.y > 16 else { hoverT = nil; return }
+        let t = g.start + Double((min(max(p.x, g.left), g.right) - g.left) / (g.right - g.left)) * g.span
+        hoverT = min(t, last.t)
+    }
+    override func mouseExited(with event: NSEvent) { hoverT = nil }
     let fullHeight: CGFloat = 140
     let collapsedHeight: CGFloat = 18
     var targetHeight: CGFloat { collapsed ? collapsedHeight : fullHeight }
@@ -152,7 +169,11 @@ final class ChartView: NSView {
         let tempLane = NSRect(x: plotLeft, y: plotsBottom, width: plotW, height: laneH)
         let (tStart, tEnd) = range
         let w = tEnd - tStart
+        geom = (plotLeft, plotRight, tStart, w)
         func x(_ t: TimeInterval) -> CGFloat { plotLeft + CGFloat((t - tStart) / w) * plotW }
+        // the sample under the cursor, if any: it takes over the right-hand values and the axis
+        let hovered: Sample? = hoverT.flatMap { ht in samples.min { abs($0.t - ht) < abs($1.t - ht) } }
+            .flatMap { abs($0.t - hoverT!) < 30 ? $0 : nil }
 
         // rest shading
         NSColor.labelColor.withAlphaComponent(0.08).setFill()
@@ -214,20 +235,42 @@ final class ChartView: NSView {
         }
         text("CPU", NSPoint(x: 0, y: cpuLane.midY), .controlAccentColor, .semibold)
         text("Temp", NSPoint(x: 0, y: tempLane.midY), .systemOrange, .semibold)
-        text("\(Int(last.cpu))%", NSPoint(x: bounds.width, y: cpuLane.midY), .controlAccentColor, .semibold, right: true)
-        text(last.temp.map { "\(Int($0.rounded()))°C" } ?? "n/a", NSPoint(x: bounds.width, y: tempLane.midY), .systemOrange, .semibold, right: true)
+        let shown = hovered ?? last
+        text("\(Int(shown.cpu))%", NSPoint(x: bounds.width, y: cpuLane.midY), .controlAccentColor, .semibold, right: true)
+        text(shown.temp.map { "\(Int($0.rounded()))°C" } ?? "n/a", NSPoint(x: bounds.width, y: tempLane.midY), .systemOrange, .semibold, right: true)
+        // hover cursor: solid line and dots at the hovered sample
+        if let hv = hovered {
+            let hx = x(hv.t)
+            let line = NSBezierPath(); line.move(to: NSPoint(x: hx, y: plotsBottom)); line.line(to: NSPoint(x: hx, y: plotsTop))
+            line.lineWidth = 1; NSColor.labelColor.withAlphaComponent(0.6).setStroke(); line.stroke()
+            func hdot(_ v: Double, lane: NSRect, maxV: Double, minV: Double, _ color: NSColor) {
+                let py = lane.minY + CGFloat((v - minV) / max(1, maxV - minV)) * lane.height
+                color.setFill(); NSBezierPath(ovalIn: NSRect(x: hx - 3, y: min(lane.maxY, max(lane.minY, py)) - 3, width: 6, height: 6)).fill()
+            }
+            hdot(hv.cpu, lane: cpuLane, maxV: cpuMax, minV: 0, .controlAccentColor)
+            if let t = hv.temp { hdot(t, lane: tempLane, maxV: tMax, minV: tMin, .systemOrange) }
+        }
         // time axis: at most 4 labels (6 in the wider window) plus "Now"; a label never overlaps "Now"
         let maxTicks = bounds.width > 420 ? 6 : 4
         let steps: [TimeInterval] = [60, 120, 300, 600, 900, 1800, 3600, 7200]
         let step = steps.first { w / $0 <= Double(maxTicks) } ?? 7200
         let f = DateFormatter(); f.dateFormat = "HH:mm"
+        let hx: CGFloat? = hovered.map { x($0.t) }
         var tick = (floor(tStart / step) + 1) * step
         while tick <= last.t {                       // only times that have already passed
             let tx = x(tick)
-            if nx - tx > 44 { text(f.string(from: Date(timeIntervalSinceReferenceDate: tick)), NSPoint(x: tx - 16, y: 7), .secondaryLabelColor) }
+            if nx - tx > 44 && (hx.map { abs($0 - tx) > 40 } ?? true) { text(f.string(from: Date(timeIntervalSinceReferenceDate: tick)), NSPoint(x: tx - 16, y: 7), .secondaryLabelColor) }
             tick += step
         }
-        text("Now", NSPoint(x: nx + 14, y: 7), .secondaryLabelColor, .medium, right: true)
+        if let hv = hovered, let hx = hx {
+            let f2 = DateFormatter(); f2.dateFormat = "HH:mm:ss"
+            let label = f2.string(from: Date(timeIntervalSinceReferenceDate: hv.t))
+            let lx = min(max(hx, plotLeft + 26), plotRight - 26)
+            text(label, NSPoint(x: lx - 26, y: 7), .labelColor, .semibold)
+            if nx - hx > 50 { text("Now", NSPoint(x: nx + 14, y: 7), .secondaryLabelColor, .medium, right: true) }
+        } else {
+            text("Now", NSPoint(x: nx + 14, y: 7), .secondaryLabelColor, .medium, right: true)
+        }
     }
 }
 
