@@ -97,6 +97,7 @@ final class ChartView: NSView {
         collapsed = false
     }
     required init?(coder: NSCoder) { fatalError() }
+    override var allowsVibrancy: Bool { false }   // keep real colours inside the popover
     let fullHeight: CGFloat = 140
     let collapsedHeight: CGFloat = 18
     var targetHeight: CGFloat { collapsed ? collapsedHeight : fullHeight }
@@ -199,7 +200,7 @@ final class ChartView: NSView {
         // now line + end dots
         let nx = x(last.t)
         let now = NSBezierPath(); now.move(to: NSPoint(x: nx, y: plotsBottom)); now.line(to: NSPoint(x: nx, y: plotsTop))
-        now.setLineDash([3, 3], count: 2, phase: 0); now.lineWidth = 1; NSColor.tertiaryLabelColor.setStroke(); now.stroke()
+        now.setLineDash([3, 3], count: 2, phase: 0); now.lineWidth = 1; NSColor.labelColor.withAlphaComponent(0.45).setStroke(); now.stroke()
         func dot(_ v: Double, lane: NSRect, maxV: Double, minV: Double, _ color: NSColor) {
             let py = lane.minY + CGFloat((v - minV) / max(1, maxV - minV)) * lane.height
             color.setFill(); NSBezierPath(ovalIn: NSRect(x: nx - 3, y: min(lane.maxY, max(lane.minY, py)) - 3, width: 6, height: 6)).fill()
