@@ -339,7 +339,7 @@ final class LogBoxView: NSView {
         didSet {
             scroll.isHidden = !expanded
             separator.isHidden = !expanded
-            chevron.image = NSImage(systemSymbolName: expanded ? "chevron.up" : "chevron.down",
+            chevron.image = NSImage(systemSymbolName: expanded ? "chevron.down" : "chevron.right",
                                     accessibilityDescription: expanded ? "Collapse activity log" : "Expand activity log")
         }
     }
