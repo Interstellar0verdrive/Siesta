@@ -18,7 +18,7 @@ struct Target {
 
 let target = Target(name: "HandBrake", bundleMarker: "HandBrake.app/", workerMarker: "XPCServices")
 
-let popoverWidth: CGFloat = 350
+let popoverWidth: CGFloat = 380
 let windowWidth: CGFloat = 490
 
 /// Panel background: a click on empty space drops focus from a text field and commits its value.
@@ -277,7 +277,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     /// Finder and the Dock use has a single variant on macOS versions without Icon Composer support.
     static func appArtwork() -> NSImage? {
         let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        return NSImage(named: dark ? "Siesta-dark-1024" : "Siesta-light-1024") ?? NSApp.applicationIconImage
+        return NSImage(named: dark ? "Siesta-dark-512" : "Siesta-light-512") ?? NSApp.applicationIconImage
     }
 
     // MARK: Lifecycle
@@ -428,7 +428,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         showVersion()
         let footer = NSStackView(views: [detachCheckbox, NSView(), versionLink, quitButton])
         footer.orientation = .horizontal; footer.alignment = .centerY
-        footer.setCustomSpacing(14, after: versionLink)
+        footer.setCustomSpacing(12, after: versionLink)
+        detachCheckbox.setContentCompressionResistancePriority(.required, for: .horizontal)   // never truncate the label
         // Tab order: Work → Rest → Start/Stop → Quit → Work
         workField.nextKeyView = restField
         restField.nextKeyView = runButton

@@ -16,7 +16,7 @@ swiftc -O -swift-version 5 -target arm64-apple-macos13  -o build/obj/Siesta-arm6
 swiftc -O -swift-version 5 -target x86_64-apple-macos13 -o build/obj/Siesta-x86_64 Sources/main.swift
 lipo -create build/obj/Siesta-arm64 build/obj/Siesta-x86_64 -output "$APP/Contents/MacOS/Siesta"
 cp Resources/Info.plist "$APP/Contents/"
-cp Resources/Siesta.icns Resources/states/*.png Resources/icon/Siesta-light-1024.png Resources/icon/Siesta-dark-1024.png "$APP/Contents/Resources/"
+cp Resources/Siesta.icns Resources/states/*.png Resources/dialog/Siesta-light-512.png Resources/dialog/Siesta-dark-512.png "$APP/Contents/Resources/"
 ICON="icns only"
 if ACTOOL=$(xcrun --find actool 2>/dev/null); then
   rm -rf build/obj/icon && mkdir -p build/obj/icon
