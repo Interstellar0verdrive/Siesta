@@ -267,11 +267,10 @@ final class ChartView: NSView {
         let labelCount = bounds.width > 420 ? 6 : 4
         let f = DateFormatter(); f.dateFormat = "HH:mm"
         let hx: CGFloat? = hovered.map { x($0.t) }
-        let shownSpan = last.t - tStart
         for i in 0..<labelCount {
-            let t = tStart + shownSpan * Double(i) / Double(labelCount)
+            let t = tStart + w * Double(i) / Double(labelCount)          // spread over the visible window
             let tx = x(t)
-            guard nx - tx > 44, hx.map({ abs($0 - tx) > 40 }) ?? true else { continue }
+            guard t <= last.t, nx - tx > 44, hx.map({ abs($0 - tx) > 40 }) ?? true else { continue }
             let label = f.string(from: Date(timeIntervalSinceReferenceDate: t))
             let lw = NSAttributedString(string: label, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)]).size().width
             text(label, NSPoint(x: i == 0 ? plotLeft : tx - lw / 2, y: 7), .secondaryLabelColor)
@@ -669,6 +668,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     var lowSeconds: Double = 0       // consecutive seconds below the CPU threshold
     let idleGrace: Double = 10       // seconds of low CPU before "idle" is declared
     var restStart = Date()
+    var restEnd = Date()
     var isEncoding = false
     var frozenPids: [pid_t] = []
     let defaults = UserDefaults.standard
@@ -1392,6 +1392,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                     frozenPids = toFreeze.map { $0.pid }
                     phase = .resting
                     restStart = now
+                    // resume exactly when the clock reaches the announced minute
+                    let planned = now.addingTimeInterval(restMinutes * 60).timeIntervalSinceReferenceDate
+                    restEnd = Date(timeIntervalSinceReferenceDate: floor(planned / 60) * 60)
                     log("\(target.name) paused · CPU \(Int(percentOfMachine(totalCpu)))%")
                 }
             } else {
@@ -1403,7 +1406,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             }
         case .resting:
             record(cpu: 0)   // the worker is frozen
-            if now.timeIntervalSince(restStart) >= restMinutes * 60 {
+            if now >= restEnd {
                 resume()
                 phase = .working
                 workSeconds = 0; idleSeconds = 0
@@ -1476,8 +1479,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             progressLabel.stringValue = "Work interval"
             progressDetail.stringValue = "\(Int(elapsed / 60)) of \(Int(workMinutes)) min elapsed"
             if isEncoding {
+                let eta = f.string(from: Date().addingTimeInterval(total - elapsed))
                 setStatus(state: "working", description: "Working", title: "\(target.name) is working",
-                          subtitle: "Next pause", count: "\(left)m",
+                          subtitle: "Next pause at \(eta)", count: "\(left)m",
                           tooltip: "\(target.name) is working, pause in \(left) min", barTitle: "\(left)m")
             } else {
                 setStatus(state: "waiting", description: "Waiting", title: "Waiting for \(target.name)",
@@ -1486,14 +1490,14 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             }
             runButton.title = "Stop cycle"
         case .resting:
-            let total = restMinutes * 60
+            let total = max(1, restEnd.timeIntervalSince(restStart))
             let elapsed = min(Date().timeIntervalSince(restStart), total)
             let left = Int(ceil((total - elapsed) / 60))
             progress.value = elapsed / total
             progressLabel.stringValue = "Rest interval"
             progressDetail.stringValue = "\(Int(elapsed / 60)) of \(Int(restMinutes)) min elapsed"
             setStatus(state: "resting", description: "Resting", title: "\(target.name) is resting",
-                      subtitle: "Resumes at \(f.string(from: restStart.addingTimeInterval(total)))", count: "\(left)m",
+                      subtitle: "Resumes at \(f.string(from: restEnd))", count: "\(left)m",
                       tooltip: "resting, \(target.name) resumes in \(left) min", barTitle: "\(left)m")
             runButton.title = "Stop cycle"
         }
