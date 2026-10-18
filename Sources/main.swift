@@ -131,14 +131,15 @@ final class ChartView: NSView {
     @objc func resetZoom() { zoomSpan = nil; legend.isEnabled = false; window?.invalidateCursorRects(for: legend) }
 
     /// Longest span that has data: nothing to zoom into beyond what was recorded.
+    let minZoom: TimeInterval = 30
     var availableSpan: TimeInterval {
-        guard let first = samples.first?.t, let last = samples.last?.t else { return minWindow }
-        return min(maxWindow, max(minWindow, last - first))
+        guard let first = samples.first?.t, let last = samples.last?.t else { return 0 }
+        return min(maxWindow, last - first)
     }
     private func zoom(by factor: Double) {
-        guard !collapsed, availableSpan > minWindow + 1 else { return }
+        guard !collapsed, availableSpan > minZoom else { return }
         let current = zoomSpan ?? (range.end - range.start)
-        let next = min(availableSpan, max(minWindow, current * factor))
+        let next = min(availableSpan, max(minZoom, current * factor))
         zoomSpan = next
         legend.isEnabled = true
         window?.invalidateCursorRects(for: legend)
@@ -161,7 +162,7 @@ final class ChartView: NSView {
     /// reaches 6 hours, then slides so the newest sample stays at the right edge.
     var range: (start: TimeInterval, end: TimeInterval) {
         guard let first = samples.first?.t, let last = samples.last?.t else { let n = Date.timeIntervalSinceReferenceDate; return (n - minWindow, n) }
-        if let z = zoomSpan { return (last - min(z, max(minWindow, last - first)), last) }
+        if let z = zoomSpan { return (last - min(z, max(minZoom, last - first)), last) }
         if last - first >= maxWindow { return (last - maxWindow, last) }
         return (first, first + max(minWindow, last - first))
     }
