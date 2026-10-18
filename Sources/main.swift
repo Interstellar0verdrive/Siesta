@@ -264,14 +264,17 @@ final class ChartView: NSView {
             if let t = hv.temp { hdot(t, lane: tempLane, maxV: tMax, minV: tMin, tempColor) }
         }
         // time axis: the start time flush left, "Now" at the right, the others spread evenly in between
-        let labelCount = bounds.width > 420 ? 6 : 4
+        let labelCount = min(bounds.width > 420 ? 6 : 4, max(2, Int(w / 60)))   // never closer than a minute
         let f = DateFormatter(); f.dateFormat = "HH:mm"
         let hx: CGFloat? = hovered.map { x($0.t) }
+        var previous = ""
         for i in 0..<labelCount {
             let t = tStart + w * Double(i) / Double(labelCount)          // spread over the visible window
             let tx = x(t)
             guard t <= last.t, nx - tx > 44, hx.map({ abs($0 - tx) > 40 }) ?? true else { continue }
             let label = f.string(from: Date(timeIntervalSinceReferenceDate: t))
+            guard label != previous else { continue }
+            previous = label
             let lw = NSAttributedString(string: label, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)]).size().width
             text(label, NSPoint(x: i == 0 ? plotLeft : tx - lw / 2, y: 7), .secondaryLabelColor)
         }
