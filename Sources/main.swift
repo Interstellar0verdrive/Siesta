@@ -73,10 +73,12 @@ final class ChartView: NSView {
     let legend = LinkButton(title: "", target: nil, action: nil)
     var onToggle: (() -> Void)?
     /// Manual zoom span (nil = automatic window). Pinch or scroll over the plot sets it; "Reset" clears it.
-    var zoomSpan: TimeInterval? { didSet { needsDisplay = true } }
-    /// Right edge of the view while panned back in time; nil = follow the newest sample.
-    var viewEnd: TimeInterval? { didSet { needsDisplay = true } }
-    var isCustomView: Bool { zoomSpan != nil || viewEnd != nil }
+    /// Custom view set by zoom or pan: left edge and width. nil = automatic view.
+    var view: (start: TimeInterval, span: TimeInterval)? { didSet { needsDisplay = true } }
+    /// With a custom view: the right edge tracks the newest sample (or, while the data is
+    /// narrower than the view, the left edge stays on the first sample).
+    var followNow = true
+    var isCustomView: Bool { view != nil }
     var collapsed = false { didSet { chevron.image = NSImage(systemSymbolName: collapsed ? "chevron.right" : "chevron.down", accessibilityDescription: collapsed ? "Expand chart" : "Collapse chart"); needsDisplay = true } }
 
     init() {
@@ -131,50 +133,54 @@ final class ChartView: NSView {
     }
     override func mouseExited(with event: NSEvent) { hoverT = nil }
     func visibleSamples(_ a: TimeInterval, _ b: TimeInterval) -> [Sample] { samples.filter { $0.t >= a && $0.t <= b } }
-    /// Where a view of width `z` may start: data wider than the view must fill it; data narrower
-    /// than the view may float, as long as at least a minute of it stays visible.
-    func startBounds(_ z: TimeInterval) -> (lo: TimeInterval, hi: TimeInterval) {
-        guard let first = samples.first?.t, let last = samples.last?.t else { return (0, 0) }
-        return z <= last - first ? (first, last - z) : (last - z, last - minZoom)
+    /// The left edge may sit anywhere from the first sample up to a few seconds before the newest one:
+    /// empty space on the right is fine (the view fills up as time passes), empty space on the left is not.
+    func clampStart(_ start: TimeInterval, span: TimeInterval) -> TimeInterval {
+        guard let first = samples.first?.t, let last = samples.last?.t else { return start }
+        return min(max(first, last - 5), max(first, start))
     }
+    /// Does a view placed at `start` naturally track now? Yes when its right edge sits on the newest sample,
+    /// or when it is left-anchored while the data is still narrower than it (it fills up like the automatic view).
+    func tracksNow(start: TimeInterval, span: TimeInterval) -> Bool {
+        guard let first = samples.first?.t, let last = samples.last?.t else { return true }
+        return abs(start + span - last) <= 0.5 || (span > last - first && start <= first + 0.5)
+    }
+    private func markCustom() { legend.isEnabled = true; window?.invalidateCursorRects(for: legend) }
 
     @objc func resetZoom() {
         guard let first = samples.first?.t, let last = samples.last?.t else { return }
         let autoSpan = last - first >= maxWindow ? maxWindow : max(minWindow, last - first)
-        let autoEnd = last - first >= maxWindow ? last : first + autoSpan
-        animateView(toSpan: autoSpan, toEnd: autoEnd) { [weak self] in
-            self?.zoomSpan = nil; self?.viewEnd = nil
+        let autoStart = last - first >= maxWindow ? last - maxWindow : first
+        animateView(toStart: autoStart, toSpan: autoSpan) { [weak self] in
+            self?.view = nil; self?.followNow = true
             self?.legend.isEnabled = false; self?.window?.invalidateCursorRects(for: self!.legend)
         }
     }
     private var viewTween: Timer?
-    /// Glides span and right edge to a target over 1.2 s with ease-in-out, then runs `done`.
-    private func animateView(toSpan: TimeInterval, toEnd: TimeInterval, done: @escaping () -> Void) {
+    /// Glides the view to a target over 1.2 s with ease-in-out, then runs `done`.
+    private func animateView(toStart: TimeInterval, toSpan: TimeInterval, done: @escaping () -> Void) {
         viewTween?.invalidate()
         let (s0, e0) = range
-        let fromSpan = e0 - s0, fromEnd = e0, start = Date()
-        legend.isEnabled = true; window?.invalidateCursorRects(for: legend)
+        let fromStart = s0, fromSpan = e0 - s0, t0 = Date()
+        followNow = false
+        markCustom()
         viewTween = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] t in
             guard let self = self else { t.invalidate(); return }
-            let p = min(1, Date().timeIntervalSince(start) / 1.2)
+            let p = min(1, Date().timeIntervalSince(t0) / 1.2)
             let e = p < 0.5 ? 2 * p * p : 1 - pow(-2 * p + 2, 2) / 2
-            self.zoomSpan = fromSpan + (toSpan - fromSpan) * e
-            self.viewEnd = fromEnd + (toEnd - fromEnd) * e
+            self.view = (fromStart + (toStart - fromStart) * e, fromSpan + (toSpan - fromSpan) * e)
             if p >= 1 { t.invalidate(); done() }
         }
     }
-    private func markCustom() { legend.isEnabled = true; window?.invalidateCursorRects(for: legend) }
 
-    /// Shifts the view by a time delta, clamped to the recorded history; back at the right edge it follows Now again.
+    /// Shifts the view in time; back at the newest sample it tracks now again.
     private func pan(by dt: TimeInterval) {
-        guard let first = samples.first?.t, let last = samples.last?.t else { return }
         let (start, end) = range
         let span = end - start
-        let (lo, hi) = startBounds(span)
-        let newStart = min(hi, max(lo, start + dt))
-        let following = span <= last - first ? newStart + span >= last - 0.5 : newStart <= first + 0.5
-        viewEnd = following ? nil : newStart + span
-        if viewEnd == nil && zoomSpan == nil { legend.isEnabled = false; window?.invalidateCursorRects(for: legend) } else { markCustom() }
+        let newStart = clampStart(start + dt, span: span)
+        view = (newStart, span)
+        followNow = tracksNow(start: newStart, span: span)
+        markCustom()
     }
     private var dragLastX: CGFloat?
     private var leftArrowRect = NSRect.zero, rightArrowRect = NSRect.zero
@@ -182,13 +188,16 @@ final class ChartView: NSView {
     func goToNow() {
         guard let last = samples.last?.t else { return }
         let span = range.end - range.start
-        animateView(toSpan: span, toEnd: last) { [weak self] in self?.viewEnd = nil; self?.markCustom() }
+        animateView(toStart: clampStart(last - span, span: span), toSpan: span) { [weak self] in self?.followNow = true; self?.markCustom() }
     }
     /// Jump to the beginning of the recorded history keeping the current zoom.
     func goToStart() {
         guard let first = samples.first?.t else { return }
         let span = range.end - range.start
-        animateView(toSpan: span, toEnd: first + span) { [weak self] in self?.markCustom() }
+        animateView(toStart: first, toSpan: span) { [weak self] in
+            guard let self = self else { return }
+            self.followNow = self.tracksNow(start: first, span: span); self.markCustom()
+        }
     }
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
@@ -217,20 +226,18 @@ final class ChartView: NSView {
         guard let first = samples.first?.t, let last = samples.last?.t else { return 0 }
         return min(maxWindow, last - first)
     }
+    /// Zooms around `anchor` (a time): the point under the cursor keeps its place on screen.
     private func zoom(by factor: Double, at anchor: TimeInterval?) {
         guard !collapsed, let first = samples.first?.t, let last = samples.last?.t, last - first > 5 else { return }
         let (start, end) = range
         let current = end - start
         let widest = max(availableSpan, current)                 // never wider than data, unless already shown
         let next = min(widest, max(minZoom, current * factor))
-        // keep the time under the cursor where it is
         let pivot = anchor ?? end
         let frac = (pivot - start) / current
-        let (lo, hi) = startBounds(next)
-        let newStart = min(hi, max(lo, pivot - frac * next))
-        zoomSpan = next
-        let following = next <= last - first ? newStart + next >= last - 0.5 : newStart <= first + 0.5
-        viewEnd = following ? nil : newStart + next
+        let newStart = clampStart(pivot - frac * next, span: next)
+        view = (newStart, next)
+        followNow = tracksNow(start: newStart, span: next)
         markCustom()
     }
     private func timeAt(_ event: NSEvent) -> TimeInterval? {
@@ -242,15 +249,12 @@ final class ChartView: NSView {
         guard let g = geom, !collapsed else { return }
         let dx = event.scrollingDeltaX, dy = event.scrollingDeltaY
         if abs(dx) > abs(dy) {
-            // horizontal scroll (two fingers, or a horizontal wheel): pan
             guard abs(dx) > 0.5 else { return }
             pan(by: -Double(dx / (g.right - g.left)) * g.span)
         } else if !event.hasPreciseScrollingDeltas {
-            // mouse wheel: zoom around the cursor
             guard abs(dy) > 0.5 else { return }
             zoom(by: dy > 0 ? 1.04 : 1 / 1.04, at: timeAt(event))
         }
-        // vertical two-finger scroll is left to the page
     }
     override func magnify(with event: NSEvent) { zoom(by: 1 / max(0.2, 1 + event.magnification), at: timeAt(event)) }
     let fullHeight: CGFloat = 140
@@ -266,16 +270,11 @@ final class ChartView: NSView {
     /// reaches 6 hours, then slides so the newest sample stays at the right edge.
     var range: (start: TimeInterval, end: TimeInterval) {
         guard let first = samples.first?.t, let last = samples.last?.t else { let n = Date.timeIntervalSinceReferenceDate; return (n - minWindow, n) }
-        if let z = zoomSpan {
-            // allowed starts: data narrower than the view may float inside it, wider data must fill it
-            let (lo, hi) = startBounds(z)
-            let start: TimeInterval
-            if let e = viewEnd { start = min(hi, max(lo, e - z)) }
-            else { start = z <= last - first ? last - z : first }     // following now: newest at the right, or left-anchored
-            return (start, start + z)
+        if let v = view {
+            // following: right edge on the newest sample once the data is wide enough, left-anchored before that
+            let start = followNow ? (v.span <= last - first ? last - v.span : first) : clampStart(v.start, span: v.span)
+            return (start, start + v.span)
         }
-        let end = min(last, viewEnd ?? last)
-        if viewEnd != nil { let w = min(maxWindow, max(minWindow, last - first)); return (max(first, end - w), end) }
         if last - first >= maxWindow { return (last - maxWindow, last) }
         return (first, first + max(minWindow, last - first))
     }
