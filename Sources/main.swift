@@ -463,7 +463,7 @@ final class LogBoxView: NSView {
     override var wantsUpdateLayer: Bool { true }
     override func updateLayer() {
         layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.06).cgColor
-        layer?.borderColor = NSColor.labelColor.withAlphaComponent(0.14).cgColor
+        layer?.borderColor = NSColor.labelColor.withAlphaComponent(0.16).cgColor
     }
 }
 
@@ -501,8 +501,8 @@ final class NumberBox: NSView {
     required init?(coder: NSCoder) { fatalError() }
     override var wantsUpdateLayer: Bool { true }
     override func updateLayer() {
-        easeLayerColor(layer, "backgroundColor", to: NSColor.labelColor.withAlphaComponent(hovered && !editing ? 0.09 : 0.06).cgColor)
-        easeLayerColor(layer, "borderColor", to: editing ? NSColor.controlAccentColor.cgColor : NSColor.labelColor.withAlphaComponent(hovered ? 0.55 : 0.35).cgColor)
+        easeLayerColor(layer, "backgroundColor", to: NSColor.labelColor.withAlphaComponent(hovered && !editing ? 0.11 : 0.06).cgColor)
+        easeLayerColor(layer, "borderColor", to: editing ? NSColor.controlAccentColor.cgColor : NSColor.labelColor.withAlphaComponent(0.16).cgColor)
     }
 }
 
@@ -548,8 +548,8 @@ final class StyledCheckbox: NSView {
             check.move(to: NSPoint(x: r.minX + 4.5, y: r.midY)); check.line(to: NSPoint(x: r.minX + 7.5, y: r.minY + 4.5)); check.line(to: NSPoint(x: r.maxX - 4, y: r.maxY - 5))
             NSColor.white.setStroke(); check.stroke()
         } else {
-            NSColor.labelColor.withAlphaComponent(hovered ? 0.09 : 0.06).setFill(); path.fill()
-            NSColor.labelColor.withAlphaComponent(hovered ? 0.55 : 0.35).setStroke(); path.lineWidth = 1; path.stroke()
+            NSColor.labelColor.withAlphaComponent(hovered ? 0.11 : 0.06).setFill(); path.fill()
+            NSColor.labelColor.withAlphaComponent(0.16).setStroke(); path.lineWidth = 1; path.stroke()
         }
     }
 }
@@ -608,8 +608,8 @@ final class FlatButton: NSButton {
             fill = isHighlighted ? red.blended(withFraction: 0.2, of: .black) : red
             border = NSColor.white.withAlphaComponent(0.12)
         } else {
-            fill = NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.16 : hovered ? 0.12 : 0.08)
-            border = NSColor.labelColor.withAlphaComponent(hovered ? 0.24 : 0.16)
+            fill = NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.16 : hovered ? 0.11 : 0.06)
+            border = NSColor.labelColor.withAlphaComponent(0.16)
         }
         easeLayerColor(layer, "backgroundColor", to: fill?.cgColor)
         easeLayerColor(layer, "borderColor", to: border.cgColor)
