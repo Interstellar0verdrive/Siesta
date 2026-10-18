@@ -125,13 +125,14 @@ final class ChartView: NSView {
         addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil))
     }
     override func mouseMoved(with event: NSEvent) {
-        guard !collapsed, let g = geom, let last = samples.last else { hoverT = nil; return }
         let p = convert(event.locationInWindow, from: nil)
+        hoveredArrow = leftArrowRect.contains(p) ? -1 : rightArrowRect.contains(p) ? 1 : 0
+        guard !collapsed, let g = geom, let last = samples.last else { hoverT = nil; return }
         guard p.x >= g.left - 4, p.x <= g.right + 4, p.y >= g.bottom, p.y <= g.top else { hoverT = nil; return }
         let t = g.start + Double((min(max(p.x, g.left), g.right) - g.left) / (g.right - g.left)) * g.span
         hoverT = min(t, min(last.t, range.end))
     }
-    override func mouseExited(with event: NSEvent) { hoverT = nil }
+    override func mouseExited(with event: NSEvent) { hoverT = nil; hoveredArrow = 0 }
     func visibleSamples(_ a: TimeInterval, _ b: TimeInterval) -> [Sample] { samples.filter { $0.t >= a && $0.t <= b } }
     /// The left edge may sit anywhere from the first sample up to a few seconds before the newest one:
     /// empty space on the right is fine (the view fills up as time passes), empty space on the left is not.
@@ -173,6 +174,15 @@ final class ChartView: NSView {
         }
     }
 
+    /// Called for every new sample: a fixed view whose right edge "now" has just reached starts tracking it,
+    /// exactly like the automatic view does; a view deliberately panned back (now already beyond) stays put.
+    func noteNewSample() {
+        guard let v = view, !followNow, samples.count >= 2 else { return }
+        let last = samples[samples.count - 1].t, previous = samples[samples.count - 2].t
+        let edge = v.start + v.span
+        if previous < edge - 0.5 && last >= edge - 0.5 { followNow = true }
+    }
+
     /// Shifts the view in time; back at the newest sample it tracks now again.
     private func pan(by dt: TimeInterval) {
         let (start, end) = range
@@ -184,6 +194,11 @@ final class ChartView: NSView {
     }
     private var dragLastX: CGFloat?
     private var leftArrowRect = NSRect.zero, rightArrowRect = NSRect.zero
+    private var hoveredArrow: Int = 0 { didSet { if hoveredArrow != oldValue { needsDisplay = true } } }   // -1 left, 1 right
+    override func resetCursorRects() {
+        if !leftArrowRect.isEmpty { addCursorRect(leftArrowRect, cursor: .pointingHand) }
+        if !rightArrowRect.isEmpty { addCursorRect(rightArrowRect, cursor: .pointingHand) }
+    }
     /// Jump to the newest data keeping the current zoom.
     func goToNow() {
         guard let last = samples.last?.t else { return }
@@ -388,14 +403,17 @@ final class ChartView: NSView {
         // edge chevrons: newer data to the right, older data to the left (click to jump)
         func chevron(at cx: CGFloat, pointingRight: Bool) -> NSRect {
             let cy = (plotsTop + plotsBottom) / 2, d: CGFloat = pointingRight ? 1 : -1
+            let hot = hoveredArrow == (pointingRight ? 1 : -1)
             let arrow = NSBezierPath(); arrow.move(to: NSPoint(x: cx - 2 * d, y: cy + 4)); arrow.line(to: NSPoint(x: cx + 2 * d, y: cy)); arrow.line(to: NSPoint(x: cx - 2 * d, y: cy - 4))
-            arrow.lineWidth = 1.5; arrow.lineCapStyle = .round; arrow.lineJoinStyle = .round
-            NSColor.secondaryLabelColor.setStroke(); arrow.stroke()
+            arrow.lineWidth = hot ? 2 : 1.5; arrow.lineCapStyle = .round; arrow.lineJoinStyle = .round
+            (hot ? NSColor.labelColor : NSColor.secondaryLabelColor).setStroke(); arrow.stroke()
             return NSRect(x: cx - 10, y: plotsBottom, width: 20, height: plotsTop - plotsBottom)
         }
+        let oldL = leftArrowRect, oldR = rightArrowRect
         rightArrowRect = nowVisible ? .zero : chevron(at: plotRight + 7, pointingRight: true)
         let firstT = samples.first?.t ?? tStart
         leftArrowRect = tStart > firstT + 0.5 ? chevron(at: plotLeft - 7, pointingRight: false) : .zero
+        if oldL != leftArrowRect || oldR != rightArrowRect { window?.invalidateCursorRects(for: self) }
         func dot(_ v: Double, lane: NSRect, maxV: Double, minV: Double, _ color: NSColor) {
             let py = lane.minY + CGFloat((v - minV) / max(1, maxV - minV)) * lane.height
             color.setFill(); NSBezierPath(ovalIn: NSRect(x: nx - 3, y: min(lane.maxY, max(lane.minY, py)) - 3, width: 6, height: 6)).fill()
@@ -1543,6 +1561,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let every: TimeInterval = (chart.samples.first.map { t - $0.t } ?? 0) < chart.minWindow ? 1 : 5
         if let last = chart.samples.last?.t, t - last < every - 0.5 { return }
         chart.samples.append(Sample(t: t, cpu: cpu, temp: thermometer.hottest(), resting: phase == .resting))
+        chart.noteNewSample()
         if let first = chart.samples.first?.t, t - first > chart.maxWindow + 60 {
             chart.samples.removeFirst(chart.samples.count / 10)   // trim in chunks, cheap
         }
