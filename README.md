@@ -6,11 +6,11 @@
   <img src="Resources/icon/Siesta-light-1024.png" width="128" align="right" alt="Siesta icon: a cat sleeping in front of the sun">
 </picture>
 
-A tiny macOS menu bar utility that gives a long-running video encoder periodic rests, so a laptop does not run flat out for hours on a long job or a queue of files.
+**Give your Mac a break.** Siesta is a tiny macOS menu bar utility that gives demanding, long-running processes a rhythm of work and rest. Today it gives HandBrake periodic rests, so a laptop does not run flat out for hours on a long job or a queue of files.
 
 Siesta counts the minutes the encoder has **actually** been working, then pauses it for a rest period and resumes it afterwards. The encoder simply continues from where it was: Siesta never restarts the job or touches the output file.
 
-Currently it watches **HandBrake**. The code is structured so other encoders (Tdarr, Topaz Video AI, plain ffmpeg…) can be added as profiles.
+**HandBrake** is the first supported app. The code is structured so other encoders (Tdarr, Topaz Video AI, plain ffmpeg…) can be added as profiles.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="Resources/siesta-hero-dark.png">
@@ -26,11 +26,9 @@ Currently it watches **HandBrake**. The code is structured so other encoders (Td
 - If HandBrake stays idle for at least the rest duration, the work counter resets: it already had its rest.
 - Stopping or quitting Siesta always resumes a frozen worker first.
 
-### Four states, one familiar face
+### Four states. One familiar face.
 
-*The cat tells you what Siesta is doing, right from the menu bar.*
-
-Siesta keeps its status visible without crowding the menu bar. The cat changes to show whether the cycle is stopped, HandBrake is encoding, taking a scheduled rest, or Siesta is waiting for work. During work and rest, the number beside it shows the minutes until the next change.
+**The cat tells you what Siesta is doing, right from the menu bar.** It changes to show whether the cycle is stopped, HandBrake is encoding, taking a scheduled rest, or Siesta is waiting for work. During work and rest, the number beside it shows the minutes until the next change.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="Resources/siesta-states-dark.png">
@@ -40,9 +38,7 @@ Siesta keeps its status visible without crowding the menu bar. The cat changes t
 
 ### The panel
 
-*Everything Siesta knows, one click away.*
-
-Clicking the menu bar icon opens a popover with everything Siesta knows at that moment: the current state and a countdown to the next change, a thin progress line for the running interval, the Work and Rest minutes, the Start/Stop cycle button, a collapsible activity log and a Quit button. "Next pause at" and "Resumes at" show exact times, because pauses start on a whole minute and rests last exactly the minutes you set.
+**Everything Siesta knows, one click away.** Clicking the menu bar icon opens a popover with the current state and a countdown to the next change, a thin progress line for the running interval, the Work and Rest minutes, the Start/Stop cycle button, a collapsible activity log and a Quit button. "Next pause at" and "Resumes at" show exact times, because pauses start on a whole minute and rests last exactly the minutes you set.
 
 You can change Work and Rest while the cycle runs: the new value applies as soon as you confirm it with Return, Tab or a click elsewhere, and the change appears in the activity log. In the two fields, the ↑ and ↓ keys step the value by one minute, by ten with Shift. **Stop cycle** stops Siesta's cycle, never the encoder.
 
@@ -52,9 +48,7 @@ You can change Work and Rest while the cycle runs: the new value applies as soon
 
 ### See the cycle unfold
 
-*Open the graph to follow CPU load, temperature and scheduled rests.*
-
-Expand **CPU & temperature** to see the recent history. The blue line is the encoder's CPU usage as a share of the whole Mac, from 0% to 100%; the orange line is the hottest CPU die. The shaded bands mark scheduled rests: CPU usage falls while the worker is paused, and the temperature line shows how the Mac responds.
+**Open the graph to follow CPU load, temperature and scheduled rests.** Expand **CPU & temperature** to see the recent history. The blue line is the encoder's CPU usage as a share of the whole Mac, from 0% to 100%; the orange line is the hottest CPU die. The shaded bands mark scheduled rests: CPU usage falls while the worker is paused, and the temperature line shows how the Mac responds.
 
 The chart starts with a five-minute view, grows with the session, and then keeps a rolling six-hour history. Hovering over the plot shows the readings and the time of that moment. Pinch on the trackpad or scroll over the plot to zoom in on the recent part, down to 30 seconds and never beyond the recorded history; click **Reset** to return to the automatic view.
 
@@ -66,9 +60,7 @@ Collapse the chart with the chevron next to its title and the header keeps showi
 
 ### A window when you need one
 
-*Detach the panel and open the activity log.*
-
-Turn on **Detached window** to keep Siesta open as a regular window that floats above your other apps, handy when you want to keep an eye on a long queue without reopening the popover. It holds exactly the same panel, with a little more room for the activity log. Here the chart is collapsed and **Activity log** is expanded, showing recent pauses and resumes. Uncheck Detached window to return to the menu bar popover.
+**Detach the panel and open the activity log.** Turn on **Detached window** to keep Siesta open as a regular window that floats above your other apps, handy when you want to keep an eye on a long queue without reopening the popover. It holds exactly the same panel, with a little more room for the activity log. Here the chart is collapsed and **Activity log** is expanded, showing recent pauses and resumes. Uncheck Detached window to return to the menu bar popover.
 
 <a href="Resources/siesta-interface-detached.png">
   <img src="Resources/siesta-interface-detached.png" alt="Detached Siesta window in light and dark mode during a five-minute rest, with current CPU and temperature readings and the expanded activity log">
