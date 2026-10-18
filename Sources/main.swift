@@ -19,7 +19,7 @@ struct Target {
 let target = Target(name: "HandBrake", bundleMarker: "HandBrake.app/", workerMarker: "XPCServices")
 
 let popoverWidth: CGFloat = 380
-let windowWidth: CGFloat = 490
+let windowWidth: CGFloat = 455
 
 // MARK: - Temperature (hottest CPU die sensor)
 // Apple Silicon exposes no public API for die temperatures; this is the private IOHID
