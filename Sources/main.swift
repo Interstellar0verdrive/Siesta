@@ -21,6 +21,181 @@ let target = Target(name: "HandBrake", bundleMarker: "HandBrake.app/", workerMar
 let popoverWidth: CGFloat = 380
 let windowWidth: CGFloat = 490
 
+// MARK: - Temperature (hottest CPU die sensor)
+// Apple Silicon exposes no public API for die temperatures; this is the private IOHID
+// sensor interface used by the usual menu bar monitors. If it ever stops working the
+// chart simply shows no temperature line.
+private typealias IOHIDEventSystemClientRef = CFTypeRef
+private typealias IOHIDServiceClientRef = CFTypeRef
+private typealias IOHIDEventRef = CFTypeRef
+@_silgen_name("IOHIDEventSystemClientCreate") private func IOHIDEventSystemClientCreate(_ a: CFAllocator?) -> IOHIDEventSystemClientRef?
+@_silgen_name("IOHIDEventSystemClientSetMatching") private func IOHIDEventSystemClientSetMatching(_ c: IOHIDEventSystemClientRef, _ m: CFDictionary) -> Int32
+@_silgen_name("IOHIDEventSystemClientCopyServices") private func IOHIDEventSystemClientCopyServices(_ c: IOHIDEventSystemClientRef) -> CFArray?
+@_silgen_name("IOHIDServiceClientCopyProperty") private func IOHIDServiceClientCopyProperty(_ s: IOHIDServiceClientRef, _ k: CFString) -> CFTypeRef?
+@_silgen_name("IOHIDServiceClientCopyEvent") private func IOHIDServiceClientCopyEvent(_ s: IOHIDServiceClientRef, _ t: Int64, _ o: Int32, _ ts: Int64) -> IOHIDEventRef?
+@_silgen_name("IOHIDEventGetFloatValue") private func IOHIDEventGetFloatValue(_ e: IOHIDEventRef, _ f: Int32) -> Double
+
+final class TemperatureReader {
+    private var client: IOHIDEventSystemClientRef?
+    private var dieSensors: [IOHIDServiceClientRef] = []
+    init() {
+        guard let c = IOHIDEventSystemClientCreate(kCFAllocatorDefault) else { return }
+        _ = IOHIDEventSystemClientSetMatching(c, ["PrimaryUsagePage": 0xff00, "PrimaryUsage": 5] as CFDictionary)
+        client = c
+        let services = IOHIDEventSystemClientCopyServices(c) as? [IOHIDServiceClientRef] ?? []
+        dieSensors = services.filter {
+            (IOHIDServiceClientCopyProperty($0, "Product" as CFString) as? String)?.lowercased().contains("tdie") == true
+        }
+    }
+    /// Hottest CPU die in °C, nil when no sensor is readable.
+    func hottest() -> Double? {
+        var best: Double? = nil
+        for s in dieSensors {
+            guard let e = IOHIDServiceClientCopyEvent(s, 15, 0, 0) else { continue }
+            let v = IOHIDEventGetFloatValue(e, 15 << 16)
+            if v > 0 && v < 150 { best = max(best ?? 0, v) }
+        }
+        return best
+    }
+}
+
+// MARK: - CPU & temperature chart
+struct Sample { let t: TimeInterval; let cpu: Double; let temp: Double?; let resting: Bool }
+
+final class ChartView: NSView {
+    var samples: [Sample] = []
+    var cpuMax: Double = 100          // y scale for the CPU line (grows with observed load)
+    let minWindow: TimeInterval = 5 * 60
+    let maxWindow: TimeInterval = 6 * 3600
+    let header = NSTextField(labelWithString: "CPU & temperature")
+    let legend = NSTextField(labelWithString: "")
+
+    init() {
+        super.init(frame: .zero)
+        header.font = .systemFont(ofSize: 13, weight: .semibold)
+        legend.font = .systemFont(ofSize: 11); legend.textColor = .secondaryLabelColor
+        legend.alignment = .right
+        for v in [header, legend] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
+        NSLayoutConstraint.activate([
+            header.leadingAnchor.constraint(equalTo: leadingAnchor), header.topAnchor.constraint(equalTo: topAnchor),
+            legend.trailingAnchor.constraint(equalTo: trailingAnchor), legend.firstBaselineAnchor.constraint(equalTo: header.firstBaselineAnchor),
+            heightAnchor.constraint(equalToConstant: 200),
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    var span: TimeInterval {
+        guard let first = samples.first?.t, let last = samples.last?.t else { return minWindow }
+        return min(maxWindow, max(minWindow, last - first))
+    }
+    /// Visible time range: starts at the first sample and grows (5 min minimum) until it
+    /// reaches 6 hours, then slides so the newest sample stays at the right edge.
+    var range: (start: TimeInterval, end: TimeInterval) {
+        guard let first = samples.first?.t, let last = samples.last?.t else { let n = Date.timeIntervalSinceReferenceDate; return (n - minWindow, n) }
+        if last - first >= maxWindow { return (last - maxWindow, last) }
+        return (first, first + max(minWindow, last - first))
+    }
+
+    func windowLabel() -> String {
+        let w = span
+        if w < 3600 { return "Past \(Int((w / 60).rounded())) min" }
+        let h = w / 3600
+        return h == h.rounded() ? "Past \(Int(h)) hours" : String(format: "Past %.1f hours", h)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        legend.stringValue = "■ Rest   " + windowLabel()
+        legend.attributedStringValue = {
+            let a = NSMutableAttributedString(string: "■ Rest    " + windowLabel(), attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
+            a.addAttribute(.foregroundColor, value: NSColor.labelColor.withAlphaComponent(0.18), range: NSRange(location: 0, length: 1))
+            return a
+        }()
+        guard let last = samples.last else { return }
+        let plotLeft: CGFloat = 52, plotRight = bounds.width - 62, top = bounds.height - 30, axisH: CGFloat = 20
+        let plotW = plotRight - plotLeft
+        let plotsTop = top, plotsBottom = axisH
+        let gap: CGFloat = 14
+        let laneH = (plotsTop - plotsBottom - gap) / 2
+        let cpuLane = NSRect(x: plotLeft, y: plotsBottom + laneH + gap, width: plotW, height: laneH)
+        let tempLane = NSRect(x: plotLeft, y: plotsBottom, width: plotW, height: laneH)
+        let (tStart, tEnd) = range
+        let w = tEnd - tStart
+        func x(_ t: TimeInterval) -> CGFloat { plotLeft + CGFloat((t - tStart) / w) * plotW }
+
+        // rest shading
+        NSColor.labelColor.withAlphaComponent(0.08).setFill()
+        var restStart: TimeInterval? = nil
+        for (i, smp) in samples.enumerated() where smp.t >= tStart - 1 {
+            if smp.resting && restStart == nil { restStart = smp.t }
+            let ends = !smp.resting || i == samples.count - 1
+            if let rs = restStart, ends {
+                NSRect(x: x(max(rs, tStart)), y: plotsBottom, width: max(1, x(smp.t) - x(max(rs, tStart))), height: plotsTop - plotsBottom).fill()
+                restStart = nil
+            }
+        }
+        // baselines
+        NSColor.separatorColor.setStroke()
+        for lane in [cpuLane, tempLane] {
+            let b = NSBezierPath(); b.move(to: NSPoint(x: lane.minX, y: lane.minY)); b.line(to: NSPoint(x: lane.maxX, y: lane.minY)); b.lineWidth = 1; b.stroke()
+        }
+        // lines, one point per pixel column (mean of the samples in that column)
+        let visible = samples.filter { $0.t >= tStart }
+        func path(_ value: (Sample) -> Double?, lane: NSRect, maxV: Double, minV: Double) -> NSBezierPath {
+            let p = NSBezierPath(); p.lineWidth = 1.5; p.lineJoinStyle = .round
+            var col = -1, acc = 0.0, n = 0, started = false
+            func flush(_ c: Int) {
+                guard n > 0 else { return }
+                let v = acc / Double(n)
+                let py = lane.minY + CGFloat((v - minV) / max(1, maxV - minV)) * lane.height
+                let pt = NSPoint(x: plotLeft + CGFloat(c), y: min(lane.maxY, max(lane.minY, py)))
+                if started { p.line(to: pt) } else { p.move(to: pt); started = true }
+            }
+            for smp in visible {
+                guard let v = value(smp) else { continue }
+                let c = Int(x(smp.t) - plotLeft)
+                if c != col { flush(col); col = c; acc = 0; n = 0 }
+                acc += v; n += 1
+            }
+            flush(col)
+            return p
+        }
+        NSColor.controlAccentColor.setStroke()
+        path({ $0.cpu }, lane: cpuLane, maxV: cpuMax, minV: 0).stroke()
+        let temps = visible.compactMap { $0.temp }
+        let tMin = floor(((temps.min() ?? 30) - 5) / 10) * 10, tMax = ceil(((temps.max() ?? 80) + 5) / 10) * 10
+        NSColor.systemOrange.setStroke()
+        path({ $0.temp }, lane: tempLane, maxV: tMax, minV: tMin).stroke()
+        // now line + end dots
+        let nx = x(last.t)
+        let now = NSBezierPath(); now.move(to: NSPoint(x: nx, y: plotsBottom)); now.line(to: NSPoint(x: nx, y: plotsTop))
+        now.setLineDash([3, 3], count: 2, phase: 0); now.lineWidth = 1; NSColor.tertiaryLabelColor.setStroke(); now.stroke()
+        func dot(_ v: Double, lane: NSRect, maxV: Double, minV: Double, _ color: NSColor) {
+            let py = lane.minY + CGFloat((v - minV) / max(1, maxV - minV)) * lane.height
+            color.setFill(); NSBezierPath(ovalIn: NSRect(x: nx - 3, y: min(lane.maxY, max(lane.minY, py)) - 3, width: 6, height: 6)).fill()
+        }
+        dot(last.cpu, lane: cpuLane, maxV: cpuMax, minV: 0, .controlAccentColor)
+        if let t = last.temp { dot(t, lane: tempLane, maxV: tMax, minV: tMin, .systemOrange) }
+        // labels
+        func text(_ s: String, _ pt: NSPoint, _ color: NSColor, _ weight: NSFont.Weight = .regular, right: Bool = false) {
+            let a = NSAttributedString(string: s, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: weight), .foregroundColor: color])
+            let sz = a.size(); a.draw(at: NSPoint(x: right ? pt.x - sz.width : pt.x, y: pt.y - sz.height / 2))
+        }
+        text("CPU", NSPoint(x: 0, y: cpuLane.midY), .controlAccentColor, .semibold)
+        text("Temp", NSPoint(x: 0, y: tempLane.midY), .systemOrange, .semibold)
+        text("\(Int(last.cpu))%", NSPoint(x: bounds.width, y: cpuLane.midY), .controlAccentColor, .semibold, right: true)
+        text(last.temp.map { "\(Int($0.rounded()))°C" } ?? "n/a", NSPoint(x: bounds.width, y: tempLane.midY), .systemOrange, .semibold, right: true)
+        // time axis: ticks at round times, "Now" at the right end
+        let step: TimeInterval = w <= 10 * 60 ? 60 : w <= 3600 ? 15 * 60 : w <= 3 * 3600 ? 30 * 60 : 3600
+        let f = DateFormatter(); f.dateFormat = "HH:mm"
+        var tick = (floor(tStart / step) + 1) * step
+        while tick < last.t - step * 0.35 {
+            text(f.string(from: Date(timeIntervalSinceReferenceDate: tick)), NSPoint(x: x(tick) - 16, y: 7), .secondaryLabelColor)
+            tick += step
+        }
+        text("Now", NSPoint(x: nx + 14, y: 7), .secondaryLabelColor, .medium, right: true)
+    }
+}
+
 /// Image view that keeps its real colour inside a popover (no vibrancy blending).
 final class SolidImageView: NSImageView {
     override var allowsVibrancy: Bool { false }
@@ -236,6 +411,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     let progress = NSProgressIndicator()
     let progressLabel = NSTextField(labelWithString: "")
     let progressDetail = NSTextField(labelWithString: "")
+    let chart = ChartView()
+    let thermometer = TemperatureReader()
     let workBox = NumberBox()
     let restBox = NumberBox()
     var workField: NSTextField { workBox.field }
@@ -250,6 +427,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     var updateVersion = ""
     var updating = false
     var announcedThisRun = ""
+    var quitting = false
     var logView: NSTextView { logBox.list }
     var logExpanded = false
     var logCount = 0
@@ -330,6 +508,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             signal(sig, SIG_IGN)
             let src = DispatchSource.makeSignalSource(signal: sig, queue: .main)
             src.setEventHandler { [weak self] in
+                self?.quitting = true
                 self?.resume()
                 NSApp.terminate(nil)
             }
@@ -371,6 +550,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let caption = NSStackView(views: [progressLabel, NSView(), progressDetail])
         caption.orientation = .horizontal; caption.spacing = 10
         progressWrap.setViews([progress, caption], in: .top)
+        chart.isHidden = true
         progressWrap.orientation = .vertical; progressWrap.alignment = .width; progressWrap.spacing = 4
 
         // Settings grid: labels on the left, field + unit flush right
@@ -444,15 +624,16 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         runButton.nextKeyView = quitButton
         quitButton.nextKeyView = workField
 
-        let column = NSStackView(views: [statusRow, progressWrap, divider(), settings, divider(), logBox, footer])
+        let column = NSStackView(views: [statusRow, progressWrap, chart, divider(), settings, divider(), logBox, footer])
         column.orientation = .vertical
         column.alignment = .width
         column.spacing = 19
         column.setCustomSpacing(19, after: progressWrap)
+        column.setCustomSpacing(19, after: chart)
         column.edgeInsets = NSEdgeInsets(top: 22, left: 24, bottom: 20, right: 24)
         column.translatesAutoresizingMaskIntoConstraints = false
         // the column does not reliably stretch children with an intrinsic width: pin every row to the edges
-        for row in [statusRow, progressWrap, settings, logBox, footer] as [NSView] {
+        for row in [statusRow, progressWrap, chart, settings, logBox, footer] as [NSView] {
             NSLayoutConstraint.activate([
                 row.leadingAnchor.constraint(equalTo: column.leadingAnchor, constant: 24),
                 row.trailingAnchor.constraint(equalTo: column.trailingAnchor, constant: -24),
@@ -517,7 +698,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             window!.contentViewController = panelController
             layoutPanel()
             if !window!.isVisible { window!.center() }
-            NSApp.activate(ignoringOtherApps: true)
+            if !CommandLine.arguments.contains("--no-activate") { NSApp.activate(ignoringOtherApps: true) }   // tests stay in the background
             window!.makeKeyAndOrderFront(nil)
             DispatchQueue.main.async { [weak self] in self?.window?.makeFirstResponder(nil) }
         } else {
@@ -527,7 +708,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             layoutPanel()
             popover.contentSize = panelController.view.fittingSize
             guard let button = statusItem.button else { return }
-            NSApp.activate(ignoringOtherApps: true)
+            if !CommandLine.arguments.contains("--no-activate") { NSApp.activate(ignoringOtherApps: true) }
             // anchor the arrow to the icon, not to the whole icon + countdown button
             lastPopoverFrame = .zero
             popover.show(relativeTo: iconAnchor(), of: button, preferredEdge: .minY)
@@ -598,7 +779,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         logBox.dot.isHidden = true
     }
 
-    @objc func quit() { NSApp.terminate(nil) }
+    @objc func quit() { quitting = true; NSApp.terminate(nil) }
 
     // MARK: Version and update check
     static let repo = "Interstellar0verdrive/Siesta"
@@ -830,7 +1011,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     }
 
     func controlTextDidEndEditing(_ n: Notification) {
-        guard let field = n.object as? NSTextField else { return }
+        guard !quitting, let field = n.object as? NSTextField else { return }
         (field.superview as? NumberBox)?.editing = false
         let key = field === workField ? "work" : "rest"
         let name = field === workField ? "Work" : "Rest"
@@ -887,16 +1068,29 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     }
 
     // MARK: Loop
+    let sampleEvery: TimeInterval = 5
+    func record(cpu: Double) {
+        let t = Date.timeIntervalSinceReferenceDate
+        if let last = chart.samples.last?.t, t - last < sampleEvery - 0.5 { return }
+        chart.samples.append(Sample(t: t, cpu: cpu, temp: thermometer.hottest(), resting: phase == .resting))
+        chart.cpuMax = max(chart.cpuMax, ceil(cpu / 100) * 100)
+        if let first = chart.samples.first?.t, t - first > chart.maxWindow + 60 {
+            chart.samples.removeFirst(chart.samples.count / 10)   // trim in chunks, cheap
+        }
+        if !chart.isHidden { chart.needsDisplay = true }
+    }
+
     func tick() {
         let now = Date()
         let dt = min(5, now.timeIntervalSince(lastTick))
         lastTick = now
         switch phase {
         case .stopped:
-            break
+            record(cpu: targetProcesses().reduce(0) { $0 + $1.cpu })
         case .working:
             let procs = targetProcesses()
             let totalCpu = procs.reduce(0) { $0 + $1.cpu }
+            record(cpu: totalCpu)
             let busy = !procs.isEmpty && totalCpu >= threshold
             // Hysteresis: between two queue items HandBrake drops to 0% for a few seconds.
             // Only treat it as idle after `idleGrace` seconds of continuous low CPU.
@@ -927,6 +1121,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                 }
             }
         case .resting:
+            record(cpu: 0)   // the worker is frozen
             if now.timeIntervalSince(restStart) >= restMinutes * 60 {
                 resume()
                 phase = .working
@@ -984,6 +1179,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let hideProgress = phase == .stopped
         if progressWrap.isHidden != hideProgress {
             progressWrap.isHidden = hideProgress
+            chart.isHidden = hideProgress
             layoutPanel()          // the panel height changed
         }
         switch phase {
