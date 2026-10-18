@@ -260,6 +260,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     var lastTick = Date()
     var workSeconds: Double = 0      // seconds of real encoding accumulated
     var idleSeconds: Double = 0      // consecutive seconds without encoding
+    var lowSeconds: Double = 0       // consecutive seconds below the CPU threshold
+    let idleGrace: Double = 10       // seconds of low CPU before "idle" is declared
     var restStart = Date()
     var isEncoding = false
     var frozenPids: [pid_t] = []
@@ -778,7 +780,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             defaults.set(workField.integerValue, forKey: "work")
             defaults.set(restField.integerValue, forKey: "rest")
             phase = .working
-            workSeconds = 0; idleSeconds = 0; isEncoding = false
+            workSeconds = 0; idleSeconds = 0; lowSeconds = 0; isEncoding = false
             lastTick = Date()
             log("Cycle started · \(Int(workMinutes)) min work, \(Int(restMinutes)) min rest")
         } else {
@@ -895,7 +897,11 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         case .working:
             let procs = targetProcesses()
             let totalCpu = procs.reduce(0) { $0 + $1.cpu }
-            let encoding = !procs.isEmpty && totalCpu >= threshold
+            let busy = !procs.isEmpty && totalCpu >= threshold
+            // Hysteresis: between two queue items HandBrake drops to 0% for a few seconds.
+            // Only treat it as idle after `idleGrace` seconds of continuous low CPU.
+            if busy { lowSeconds = 0 } else { lowSeconds += dt }
+            let encoding = busy || (isEncoding && lowSeconds < idleGrace)
             if encoding != isEncoding {
                 isEncoding = encoding
                 log(encoding ? "\(target.name) is encoding" :
