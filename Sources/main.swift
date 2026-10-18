@@ -139,11 +139,10 @@ final class ChartView: NSView {
         return h == h.rounded() ? "Past \(Int(h)) hours" : String(format: "Past %.1f hours", h)
     }
 
-    /// Orange reads poorly on the dark panel: lift it a little there.
-    var tempColor: NSColor {
-        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        return dark ? NSColor.systemOrange.blended(withFraction: 0.3, of: .white) ?? .systemOrange : .systemOrange
-    }
+    /// Series colours: the system ones in light appearance, lifted a little on the dark panel.
+    var isDark: Bool { effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
+    var tempColor: NSColor { isDark ? NSColor.systemOrange.blended(withFraction: 0.15, of: .white) ?? .systemOrange : .systemOrange }
+    var cpuColor: NSColor { isDark ? NSColor.controlAccentColor.blended(withFraction: 0.3, of: .white) ?? .controlAccentColor : .controlAccentColor }
 
     override func draw(_ dirtyRect: NSRect) {
         if collapsed {
@@ -218,7 +217,7 @@ final class ChartView: NSView {
             flush(col)
             return p
         }
-        NSColor.controlAccentColor.setStroke()
+        cpuColor.setStroke()
         path({ $0.cpu }, lane: cpuLane, maxV: cpuMax, minV: 0).stroke()
         let temps = visible.compactMap { $0.temp }
         let tMin = floor(((temps.min() ?? 30) - 5) / 10) * 10, tMax = ceil(((temps.max() ?? 80) + 5) / 10) * 10
@@ -232,17 +231,17 @@ final class ChartView: NSView {
             let py = lane.minY + CGFloat((v - minV) / max(1, maxV - minV)) * lane.height
             color.setFill(); NSBezierPath(ovalIn: NSRect(x: nx - 3, y: min(lane.maxY, max(lane.minY, py)) - 3, width: 6, height: 6)).fill()
         }
-        dot(last.cpu, lane: cpuLane, maxV: cpuMax, minV: 0, .controlAccentColor)
+        dot(last.cpu, lane: cpuLane, maxV: cpuMax, minV: 0, cpuColor)
         if let t = last.temp { dot(t, lane: tempLane, maxV: tMax, minV: tMin, tempColor) }
         // labels
         func text(_ s: String, _ pt: NSPoint, _ color: NSColor, _ weight: NSFont.Weight = .regular, right: Bool = false) {
             let a = NSAttributedString(string: s, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: weight), .foregroundColor: color])
             let sz = a.size(); a.draw(at: NSPoint(x: right ? pt.x - sz.width : pt.x, y: pt.y - sz.height / 2))
         }
-        text("CPU", NSPoint(x: 0, y: cpuLane.midY), .controlAccentColor, .semibold)
+        text("CPU", NSPoint(x: 0, y: cpuLane.midY), cpuColor, .semibold)
         text("Temp", NSPoint(x: 0, y: tempLane.midY), tempColor, .semibold)
         let shown = hovered ?? last
-        text("\(Int(shown.cpu))%", NSPoint(x: bounds.width, y: cpuLane.midY), .controlAccentColor, .semibold, right: true)
+        text("\(Int(shown.cpu))%", NSPoint(x: bounds.width, y: cpuLane.midY), cpuColor, .semibold, right: true)
         text(shown.temp.map { "\(Int($0.rounded()))°C" } ?? "n/a", NSPoint(x: bounds.width, y: tempLane.midY), tempColor, .semibold, right: true)
         // hover cursor: solid line and dots at the hovered sample
         if let hv = hovered {
@@ -253,7 +252,7 @@ final class ChartView: NSView {
                 let py = lane.minY + CGFloat((v - minV) / max(1, maxV - minV)) * lane.height
                 color.setFill(); NSBezierPath(ovalIn: NSRect(x: hx - 3, y: min(lane.maxY, max(lane.minY, py)) - 3, width: 6, height: 6)).fill()
             }
-            hdot(hv.cpu, lane: cpuLane, maxV: cpuMax, minV: 0, .controlAccentColor)
+            hdot(hv.cpu, lane: cpuLane, maxV: cpuMax, minV: 0, cpuColor)
             if let t = hv.temp { hdot(t, lane: tempLane, maxV: tMax, minV: tMin, tempColor) }
         }
         // time axis: at most 4 labels (6 in the wider window) plus "Now"; a label never overlaps "Now"
