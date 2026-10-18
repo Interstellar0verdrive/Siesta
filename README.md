@@ -38,6 +38,12 @@ Siesta keeps its status visible without crowding the menu bar. The cat changes t
 
 Clicking it opens a popover with the current state and countdown, a thin progress line for the running interval, the Work and Rest minutes, the Start/Stop cycle button, a collapsible activity log and a Quit button. The "Detached window" checkbox moves the same panel into a regular window; unchecking it brings the popover back. Changing the minutes while Siesta is running takes effect immediately and is noted in the log. "Stop cycle" stops Siesta's cycle only, never the encoder.
 
+### A little about the name
+
+Siesta takes its name from the afternoon nap. The cat curled up beneath a warm sun reflects the same idea: even a Mac running a long encode deserves a little rest along the way.
+
+![The Siesta icon in its light and dark variants: a cat asleep in front of the sun](Resources/siesta-icon-showcase.png)
+
 ## Download
 
 Grab `Siesta-<version>.zip` from the [Releases](https://github.com/Interstellar0verdrive/Siesta/releases) page, unzip it and move `Siesta.app` to your Applications folder. The app is universal (Apple Silicon and Intel) and needs macOS 13 or later.
