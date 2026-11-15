@@ -258,6 +258,9 @@ final class ChartView: NSView {
     let chevron = NSImageView()
     let header = NSTextField(labelWithString: "CPU & temperature")
     let legend = LinkButton(title: "", target: nil, action: nil)
+    /// Shown only while the view is zoomed or panned: back to the automatic view.
+    let resetButton = HoverIconButton(symbol: "arrow.counterclockwise", pointSize: 10, label: "Back to the automatic view")
+    private var legendTrailing: NSLayoutConstraint!
     var onToggle: (() -> Void)?
     /// Manual zoom span (nil = automatic window). Pinch or scroll over the plot sets it; "Reset" clears it.
     /// Custom view set by zoom or pan: left edge and width. nil = automatic view.
@@ -266,7 +269,7 @@ final class ChartView: NSView {
     /// narrower than the view, the left edge stays on the first sample).
     var followNow = true
     var isCustomView: Bool { view != nil }
-    var collapsed = false { didSet { chevron.image = NSImage(systemSymbolName: collapsed ? "chevron.right" : "chevron.down", accessibilityDescription: collapsed ? "Expand chart" : "Collapse chart"); needsDisplay = true } }
+    var collapsed = false { didSet { chevron.image = NSImage(systemSymbolName: collapsed ? "chevron.right" : "chevron.down", accessibilityDescription: collapsed ? "Expand chart" : "Collapse chart"); needsDisplay = true; if legendTrailing != nil { showReset(isCustomView, animated: false) } } }
 
     init() {
         super.init(frame: .zero)
@@ -274,9 +277,10 @@ final class ChartView: NSView {
         chevron.contentTintColor = .secondaryLabelColor
         header.font = .systemFont(ofSize: 13, weight: .semibold)
         legend.isBordered = false
-        legend.isEnabled = false
-        legend.target = self; legend.action = #selector(resetZoom)
+        legend.isEnabled = false          // plain text: the reset is the icon next to it
         legend.setContentHuggingPriority(.required, for: .horizontal)
+        resetButton.target = self; resetButton.action = #selector(resetZoom)
+        resetButton.alphaValue = 0; resetButton.isHidden = true
         let titleRow = NSStackView(views: [chevron, header]); titleRow.orientation = .horizontal; titleRow.spacing = 6
         titleRow.translatesAutoresizingMaskIntoConstraints = false
         headerRow.addSubview(titleRow)
@@ -289,12 +293,14 @@ final class ChartView: NSView {
                 self?.header.animator().alphaValue = on ? 0.6 : 1
             }
         }
-        for v in [headerRow, legend] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
+        for v in [headerRow, legend, resetButton] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
+        legendTrailing = legend.trailingAnchor.constraint(equalTo: trailingAnchor)
         NSLayoutConstraint.activate([
             titleRow.leadingAnchor.constraint(equalTo: headerRow.leadingAnchor), titleRow.trailingAnchor.constraint(equalTo: headerRow.trailingAnchor),
             titleRow.topAnchor.constraint(equalTo: headerRow.topAnchor), titleRow.bottomAnchor.constraint(equalTo: headerRow.bottomAnchor),
             headerRow.leadingAnchor.constraint(equalTo: leadingAnchor), headerRow.topAnchor.constraint(equalTo: topAnchor),
-            legend.trailingAnchor.constraint(equalTo: trailingAnchor), legend.firstBaselineAnchor.constraint(equalTo: header.firstBaselineAnchor),
+            legendTrailing, legend.firstBaselineAnchor.constraint(equalTo: header.firstBaselineAnchor),
+            resetButton.trailingAnchor.constraint(equalTo: trailingAnchor), resetButton.centerYAnchor.constraint(equalTo: legend.centerYAnchor, constant: 0.75),   // on the centre of the digits, measured
         ])
         heightConstraint = heightAnchor.constraint(equalToConstant: fullHeight)
         heightConstraint.isActive = true
@@ -383,7 +389,32 @@ final class ChartView: NSView {
         guard let first = samples.first?.t, let last = samples.last?.t else { return true }
         return abs(start + span - last) <= 0.5 || (span > last - first && start <= first + 0.5)
     }
-    private func markCustom() { legend.isEnabled = true; window?.invalidateCursorRects(for: legend) }
+    private func markCustom() { showReset(true) }
+    /// Fades the reset icon in or out, sliding the legend to make room for it.
+    func showReset(_ show: Bool, animated: Bool = true) {
+        let visible = show && !collapsed
+        guard visible != !resetButton.isHidden || (visible && resetButton.alphaValue < 1) else { return }
+        let room = resetButton.intrinsicContentSize.width + 5
+        if visible { resetButton.isHidden = false }
+        guard animated else {
+            legendTrailing.constant = visible ? -room : 0
+            resetButton.alphaValue = visible ? 1 : 0
+            resetButton.isHidden = !visible
+            window?.invalidateCursorRects(for: resetButton)
+            return
+        }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.2
+            ctx.allowsImplicitAnimation = true
+            legendTrailing.animator().constant = visible ? -room : 0
+            resetButton.animator().alphaValue = visible ? 1 : 0
+        }, completionHandler: { [weak self] in
+            guard let self = self, !visible, self.resetButton.alphaValue == 0 else { return }
+            self.resetButton.isHidden = true
+            self.window?.invalidateCursorRects(for: self.resetButton)
+        })
+        window?.invalidateCursorRects(for: resetButton)
+    }
 
     @objc func resetZoom() {
         guard let first = samples.first?.t, let last = samples.last?.t else { return }
@@ -391,7 +422,7 @@ final class ChartView: NSView {
         let autoStart = last - first >= maxWindow ? last - maxWindow : first
         animateView(toStart: autoStart, toSpan: autoSpan) { [weak self] in
             self?.view = nil; self?.followNow = true
-            self?.legend.isEnabled = false; self?.window?.invalidateCursorRects(for: self!.legend)
+            self?.showReset(false)
         }
     }
     private var viewTween: Timer?
@@ -489,10 +520,10 @@ final class ChartView: NSView {
         let pivot = anchor ?? end
         let frac = (pivot - start) / current
         let newStart = clampStart(pivot - frac * next, span: next)
-        // back at the automatic view: drop the custom view, so "Reset" gives way to "Past …"
+        // back at the automatic view: drop the custom view, and with it the reset icon
         if abs(next - autoWidth) < 0.5 && tracksNow(start: newStart, span: next) {
             view = nil; followNow = true
-            legend.isEnabled = false; window?.invalidateCursorRects(for: legend)
+            showReset(false)
             return
         }
         view = (newStart, next)
@@ -538,11 +569,14 @@ final class ChartView: NSView {
         return (first, first + max(minWindow, last - first))
     }
 
-    func windowLabel() -> String {
-        let w = span
-        if w < 3600 { return "Past \(Int((w / 60).rounded())) min" }
-        let h = w / 3600
-        return h == h.rounded() ? "Past \(Int(h)) hours" : String(format: "Past %.1f hours", h)
+    /// Width of the visible window in words: "6 minutes", "45 minutes", "1.5 hours", "6 hours".
+    static func spanLabel(_ w: TimeInterval) -> String {
+        if w < 90 * 60 {
+            let m = max(1, Int((w / 60).rounded()))
+            return m == 1 ? "1 minute" : "\(m) minutes"
+        }
+        let h = (w / 1800).rounded() / 2                       // to the half hour
+        return h == h.rounded() ? "\(Int(h)) hour\(h == 1 ? "" : "s")" : String(format: "%.1f hours", h)
     }
 
     /// Series colours: the system ones in light appearance, lifted a little on the dark panel.
@@ -568,11 +602,8 @@ final class ChartView: NSView {
         legend.attributedTitle = {
             let a = NSMutableAttributedString(string: "■ Rest    ", attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
             a.addAttribute(.foregroundColor, value: NSColor.labelColor.withAlphaComponent(0.18), range: NSRange(location: 0, length: 1))
-            if isCustomView {
-                a.append(NSAttributedString(string: "Reset", attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.labelColor, .underlineStyle: NSUnderlineStyle.single.rawValue]))
-            } else {
-                a.append(NSAttributedString(string: windowLabel(), attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor]))
-            }
+            let (s0, e0) = range
+            a.append(NSAttributedString(string: ChartView.spanLabel(e0 - s0), attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor]))
             return a
         }()
         guard let last = samples.last else { return }
@@ -1013,6 +1044,28 @@ final class StyledCheckbox: NSView {
 
 /// Text link: hand cursor on hover, like a web link.
 final class LinkButton: NSButton {
+    override func resetCursorRects() { if isEnabled { addCursorRect(bounds, cursor: .pointingHand) } }
+}
+
+/// Small symbol button: secondary colour at rest, full label colour under the pointer, hand cursor.
+final class HoverIconButton: NSButton {
+    var hovered = false { didSet { contentTintColor = hovered ? .labelColor : .secondaryLabelColor } }
+    init(symbol: String, pointSize: CGFloat, label: String) {
+        super.init(frame: .zero)
+        image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: pointSize, weight: .semibold))
+        isBordered = false; imagePosition = .imageOnly
+        contentTintColor = .secondaryLabelColor
+        toolTip = label
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil))
+    }
+    override func mouseEntered(with event: NSEvent) { hovered = true }
+    override func mouseExited(with event: NSEvent) { hovered = false }
     override func resetCursorRects() { if isEnabled { addCursorRect(bounds, cursor: .pointingHand) } }
 }
 
@@ -2019,6 +2072,44 @@ if let i = CommandLine.arguments.firstIndex(of: "--debug-chart"), i + 1 < Comman
     let out = URL(fileURLWithPath: CommandLine.arguments[i + 1])
     if let tiff = sheet.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
         try? png.write(to: out); print("Wrote \(out.path)")
+    }
+    exit(0)
+}
+if let i = CommandLine.arguments.firstIndex(of: "--debug-legend"), i + 1 < CommandLine.arguments.count {
+    // the chart in each legend state, light and dark, one PNG per state (2x)
+    let end = Date.timeIntervalSinceReferenceDate
+    let samples = stride(from: end - 6 * 3600, through: end, by: 5).map { t in
+        Sample(t: t, cpu: 80 + 8 * sin(t / 300), temp: 100 + 4 * sin(t / 200), resting: Int(t / 60) % 16 == 15)
+    }
+    let states: [(String, (start: TimeInterval, span: TimeInterval)?, Bool)] = [
+        ("auto", nil, false), ("zoomed", (end - 18 * 60, 18 * 60), false), ("zoomed-hover", (end - 18 * 60, 18 * 60), true),
+        ("panned", (end - 3 * 3600, 90 * 60), false)]
+    for (name, view, hover) in states {
+        for dark in [false, true] {
+            let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)!
+            let chart = ChartView()
+            chart.appearance = appearance
+            chart.frame = NSRect(x: 0, y: 0, width: 380, height: chart.fullHeight)
+            chart.samples = samples
+            chart.view = view; chart.followNow = view.map { $0.start + $0.span >= end - 1 } ?? true
+            chart.showReset(view != nil, animated: false)
+            chart.resetButton.hovered = hover
+            // a first pass sets the legend text; after layout, the real one on a clean bitmap
+            appearance.performAsCurrentDrawingAppearance { chart.cacheDisplay(in: chart.bounds, to: chart.bitmapImageRepForCachingDisplay(in: chart.bounds)!) }
+            chart.layoutSubtreeIfNeeded()
+            let rep = chart.bitmapImageRepForCachingDisplay(in: chart.bounds)!
+            appearance.performAsCurrentDrawingAppearance { chart.cacheDisplay(in: chart.bounds, to: rep) }
+            let out = URL(fileURLWithPath: CommandLine.arguments[i + 1]).deletingPathExtension()
+                .appendingPathExtension("\(name)-\(dark ? "dark" : "light").png")
+            let image = NSImage(size: chart.bounds.size)      // on the popover's own background
+            image.lockFocus()
+            NSColor(white: dark ? 0.17 : 0.93, alpha: 1).setFill(); chart.bounds.fill()
+            rep.draw(in: chart.bounds, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            image.unlockFocus()
+            if let tiff = image.tiffRepresentation { try? NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])?.write(to: out) }
+            print(out.lastPathComponent, "legend frame", chart.legend.frame, "reset frame", chart.resetButton.frame,
+                  "legend text", chart.legend.attributedTitle.string)
+        }
     }
     exit(0)
 }
