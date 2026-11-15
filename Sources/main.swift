@@ -257,7 +257,8 @@ final class ChartView: NSView, HandCursorView {
     let headerRow = ClickableRow()
     let chevron = NSImageView()
     let header = NSTextField(labelWithString: "CPU & temperature")
-    let legend = LinkButton(title: "", target: nil, action: nil)
+    /// Plain text (a disabled button would be drawn faded on the popover's translucent background).
+    let legend = NSTextField(labelWithString: "")
     /// Shown only while the view is zoomed or panned: back to the automatic view.
     let resetButton = HoverIconButton(symbol: "arrow.counterclockwise", pointSize: 10, label: "Back to the automatic view")
     private var legendTrailing: NSLayoutConstraint!
@@ -275,9 +276,9 @@ final class ChartView: NSView, HandCursorView {
         super.init(frame: .zero)
         chevron.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
         chevron.contentTintColor = .secondaryLabelColor
+        // fixed width, the wider of the two (down 13 pt, right 9 pt): the title must not shift when toggling
+        chevron.widthAnchor.constraint(equalToConstant: 13).isActive = true
         header.font = .systemFont(ofSize: 13, weight: .semibold)
-        legend.isBordered = false
-        legend.isEnabled = false          // plain text: the reset is the icon next to it
         legend.setContentHuggingPriority(.required, for: .horizontal)
         resetButton.target = self; resetButton.action = #selector(resetZoom)
         resetButton.alphaValue = 0; resetButton.isHidden = true
@@ -585,9 +586,9 @@ final class ChartView: NSView, HandCursorView {
     var tempColor: NSColor { isDark ? NSColor.systemOrange.blended(withFraction: 0.15, of: .white) ?? .systemOrange : .systemOrange }
     var cpuColor: NSColor { panelBlue(for: self) }
 
-    override func draw(_ dirtyRect: NSRect) {
+    /// Legend text: the live values while the plot is folded away, otherwise the rest key and the view's width.
+    private func legendText() -> NSAttributedString {
         if collapsed {
-            // the header carries the live values while the plot is folded away
             let last = samples.last
             let a = NSMutableAttributedString()
             func part(_ label: String, _ value: String, _ color: NSColor) {
@@ -597,16 +598,28 @@ final class ChartView: NSView, HandCursorView {
             part("CPU ", last.map { "\(Int($0.cpu))%" } ?? "–", .labelColor)
             a.append(NSAttributedString(string: "   ·   ", attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.tertiaryLabelColor]))
             part("Temp ", last?.temp.map { "\(Int($0.rounded()))°C" } ?? "n/a", .labelColor)
-            legend.attributedTitle = a
-            return
-        }
-        legend.attributedTitle = {
-            let a = NSMutableAttributedString(string: "■ Rest    ", attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
-            a.addAttribute(.foregroundColor, value: NSColor.labelColor.withAlphaComponent(0.18), range: NSRange(location: 0, length: 1))
-            let (s0, e0) = range
-            a.append(NSAttributedString(string: ChartView.spanLabel(e0 - s0), attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor]))
             return a
-        }()
+        }
+        let a = NSMutableAttributedString(string: "■ Rest    ", attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
+        a.addAttribute(.foregroundColor, value: NSColor.labelColor.withAlphaComponent(0.18), range: NSRange(location: 0, length: 1))
+        let (s0, e0) = range
+        a.append(NSAttributedString(string: ChartView.spanLabel(e0 - s0), attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor]))
+        return a
+    }
+    /// The legend is refreshed just before each redraw, the moment AppKit allows layout changes:
+    /// set from inside draw() its new width would only be picked up by a later layout pass.
+    override func viewWillDraw() {
+        let text = legendText()
+        if !legend.attributedStringValue.isEqual(to: text) {
+            legend.attributedStringValue = text
+            legend.invalidateIntrinsicContentSize()
+            layoutSubtreeIfNeeded()
+        }
+        super.viewWillDraw()
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        if collapsed { return }   // the legend alone carries the live values
         guard let last = samples.last else { return }
         let plotLeft: CGFloat = 46, plotRight = bounds.width - 48, top = bounds.height - 30, axisH: CGFloat = 20
         let plotW = plotRight - plotLeft
@@ -912,7 +925,8 @@ final class LogBoxView: NSView {
         scroll.hasVerticalScroller = true
         scroll.borderType = .noBorder
         scroll.drawsBackground = false
-        scroll.heightAnchor.constraint(equalToConstant: 120).isActive = true
+        scrollHeight = scroll.heightAnchor.constraint(equalToConstant: LogBoxView.listHeight)
+        scrollHeight.isActive = true
         list.isEditable = false
         list.drawsBackground = false
         list.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
@@ -937,17 +951,28 @@ final class LogBoxView: NSView {
         ])
         self.separator = separator
         expanded = false
+        reveal = 0
     }
     required init?(coder: NSCoder) { fatalError() }
     private var separator: NSBox!
+    private var scrollHeight: NSLayoutConstraint!
+    static let listHeight: CGFloat = 120
     @objc func clearTapped() { onClear?() }
 
+    /// Open or closed: the chevron. How much of the list shows is `reveal`, so it can be animated.
     var expanded = false {
         didSet {
-            scroll.isHidden = !expanded
-            separator.isHidden = !expanded
             chevron.image = NSImage(systemSymbolName: expanded ? "chevron.down" : "chevron.right",
                                     accessibilityDescription: expanded ? "Collapse activity log" : "Expand activity log")
+        }
+    }
+    /// 0 = closed, 1 = fully open; in between the list grows from the header and fades in.
+    var reveal: CGFloat = 1 {
+        didSet {
+            scrollHeight.constant = LogBoxView.listHeight * reveal
+            scroll.alphaValue = reveal
+            scroll.isHidden = reveal == 0
+            separator.isHidden = reveal == 0
         }
     }
     override var wantsUpdateLayer: Bool { true }
@@ -1287,6 +1312,12 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in self?.checkForUpdate() }
         refresh()
         if CommandLine.arguments.contains("--start") { toggleRun() }
+        if debugLogAnimation {   // toggles the log twice (back to how it was), printing each frame, then quits
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.showPanel() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.toggleLog() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { self.toggleLog() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { NSApp.terminate(nil) }
+        }
         if CommandLine.arguments.contains("--auto-update") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in self?.openUpdate() }
         }
@@ -1500,10 +1531,14 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     /// Recomputes the panel size after a layout change (log toggled, mode switched).
     func layoutPanel() {
         logBox.expanded = logExpanded
+        if logAnimation == nil { logBox.reveal = logExpanded ? 1 : 0 }
         logBox.count.stringValue = logCount == 0 ? "No events yet" : "\(logCount) event\(logCount == 1 ? "" : "s")"
         panelWidth.constant = detached ? windowWidth : popoverWidth
         panelController.view.layoutSubtreeIfNeeded()
-        let size = panelController.view.fittingSize   // the container sizes the view: never set its frame by hand
+        // the container sizes the view: never set its frame by hand. Whole points only: with fractional
+        // heights the popover re-rounds its position on every animation frame and its top edge trembles
+        let fitting = panelController.view.fittingSize
+        let size = NSSize(width: fitting.width.rounded(), height: fitting.height.rounded())
         if detached, let w = window, w.contentViewController === panelController {
             w.setContentSize(size)
         } else {
@@ -1603,12 +1638,30 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         showPanel()
     }
 
+    /// Opens or closes the activity log over 0.22 s with the chart's easing, the panel following.
+    var logAnimation: Timer?
     @objc func toggleLog() {
         logExpanded.toggle()
         defaults.set(logExpanded, forKey: "logExpanded")
-        layoutPanel()
-        if logExpanded { logView.scrollToEndOfDocument(nil) }
+        logBox.expanded = logExpanded
+        logAnimation?.invalidate()
+        let from = logBox.reveal, to: CGFloat = logExpanded ? 1 : 0, opening = logExpanded
+        let start = Date(), duration = 0.22
+        logAnimation = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
+            guard let self = self else { timer.invalidate(); return }
+            let p = min(1, Date().timeIntervalSince(start) / duration)
+            let eased = p < 0.5 ? 2 * p * p : 1 - pow(-2 * p + 2, 2) / 2
+            self.logBox.reveal = from + (to - from) * CGFloat(eased)
+            self.layoutPanel()
+            if opening { self.logView.scrollToEndOfDocument(nil) }   // the newest lines stay in view as it grows
+            if self.debugLogAnimation {
+                let f = self.panelController.view.window?.frame ?? .zero
+                self.debugPrint(String(format: "LOGANIM p %.2f reveal %.3f window x %.1f y %.1f w %.1f h %.1f top %.1f", p, self.logBox.reveal, f.minX, f.minY, f.width, f.height, f.maxY))
+            }
+            if p >= 1 { timer.invalidate(); self.logAnimation = nil }
+        }
     }
+    let debugLogAnimation = CommandLine.arguments.contains("--debug-log-animation")
 
     func clearLog() {
         logCount = 0
@@ -1986,7 +2039,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     /// `--debug-samples`: every log line and chart point also goes to stdout, for checking the numbers in a test run.
     let debugSamples = CommandLine.arguments.contains("--debug-samples")
     func debugPrint(_ s: String) {
-        guard debugSamples else { return }
+        guard debugSamples || debugLogAnimation else { return }
         let f = DateFormatter(); f.dateFormat = "HH:mm:ss"
         print("\(f.string(from: Date())) \(s)"); fflush(stdout)
     }
@@ -2135,7 +2188,7 @@ if let i = CommandLine.arguments.firstIndex(of: "--debug-legend"), i + 1 < Comma
     }
     let states: [(String, (start: TimeInterval, span: TimeInterval)?, Bool)] = [
         ("auto", nil, false), ("zoomed", (end - 18 * 60, 18 * 60), false), ("zoomed-hover", (end - 18 * 60, 18 * 60), true),
-        ("panned", (end - 3 * 3600, 90 * 60), false)]
+        ("panned", (end - 3 * 3600, 90 * 60), false), ("collapsed", nil, false)]
     for (name, view, hover) in states {
         for dark in [false, true] {
             let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)!
@@ -2144,8 +2197,13 @@ if let i = CommandLine.arguments.firstIndex(of: "--debug-legend"), i + 1 < Comma
             chart.frame = NSRect(x: 0, y: 0, width: 380, height: chart.fullHeight)
             chart.samples = samples
             chart.view = view; chart.followNow = view.map { $0.start + $0.span >= end - 1 } ?? true
+            chart.collapsed = name == "collapsed"
             chart.showReset(view != nil, animated: false)
             chart.resetButton.hovered = hover
+            // inside an off-screen window, as in the app: without one Auto Layout never updates the frames
+            let host = NSWindow(contentRect: chart.frame, styleMask: [.borderless], backing: .buffered, defer: true)
+            host.appearance = appearance
+            host.contentView = chart
             // a first pass sets the legend text; after layout, the real one on a clean bitmap
             appearance.performAsCurrentDrawingAppearance { chart.cacheDisplay(in: chart.bounds, to: chart.bitmapImageRepForCachingDisplay(in: chart.bounds)!) }
             chart.layoutSubtreeIfNeeded()
@@ -2159,8 +2217,8 @@ if let i = CommandLine.arguments.firstIndex(of: "--debug-legend"), i + 1 < Comma
             rep.draw(in: chart.bounds, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
             image.unlockFocus()
             if let tiff = image.tiffRepresentation { try? NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])?.write(to: out) }
-            print(out.lastPathComponent, "legend frame", chart.legend.frame, "reset frame", chart.resetButton.frame,
-                  "legend text", chart.legend.attributedTitle.string)
+            print(out.lastPathComponent, "title x", chart.header.convert(NSPoint.zero, to: chart).x, "intrinsic", chart.legend.intrinsicContentSize, "legend frame", chart.legend.frame, "reset frame", chart.resetButton.frame,
+                  "legend text", chart.legend.attributedStringValue.string)
         }
     }
     exit(0)
