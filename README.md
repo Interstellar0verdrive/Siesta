@@ -173,5 +173,11 @@ MIT, see [LICENSE](LICENSE).
 
 ---
 
-If you enjoy Siesta, you can [buy me a coffee ☕](https://ko-fi.com/Interstellar0verdrive).
-Totally optional, always appreciated!
+<p align="center">
+<a href="https://ko-fi.com/Interstellar0verdrive">
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="Resources/support-kofi-light.webp">
+  <img alt="Enjoying this project? Support independent development on Ko-fi" src="Resources/support-kofi-dark.webp" width="560">
+</picture>
+</a>
+</p>
