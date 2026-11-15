@@ -249,7 +249,7 @@ final class ProcessSampler {
 // MARK: - CPU & temperature chart
 struct Sample { let t: TimeInterval; let cpu: Double; let temp: Double?; let resting: Bool }
 
-final class ChartView: NSView {
+final class ChartView: NSView, HandCursorView {
     var samples: [Sample] = []
     var cpuMax: Double = 100          // y scale for the CPU line (grows with observed load)
     let minWindow: TimeInterval = 5 * 60
@@ -463,6 +463,7 @@ final class ChartView: NSView {
     private var dragLastX: CGFloat?
     private var leftArrowRect = NSRect.zero, rightArrowRect = NSRect.zero
     private var hoveredArrow: Int = 0 { didSet { if hoveredArrow != oldValue { needsDisplay = true } } }   // -1 left, 1 right
+    func wantsHandCursor(at point: NSPoint) -> Bool { leftArrowRect.contains(point) || rightArrowRect.contains(point) }
     override func resetCursorRects() {
         if !leftArrowRect.isEmpty { addCursorRect(leftArrowRect, cursor: .pointingHand) }
         if !rightArrowRect.isEmpty { addCursorRect(rightArrowRect, cursor: .pointingHand) }
@@ -823,7 +824,7 @@ func easeLayerColor(_ layer: CALayer?, _ keyPath: String, to color: CGColor?) {
 }
 
 /// Row that reports clicks to a closure, with a light hover highlight and a hand cursor.
-final class ClickableRow: NSView {
+final class ClickableRow: NSView, HandCursorView {
     var onClick: (() -> Void)?
     var onHover: ((Bool) -> Void)?
     var highlightsBackground = true
@@ -850,6 +851,7 @@ final class ClickableRow: NSView {
     override func mouseEntered(with event: NSEvent) { hovered = true }
     override func mouseExited(with event: NSEvent) { hovered = false }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+    func wantsHandCursor(at point: NSPoint) -> Bool { true }
     override func draw(_ dirtyRect: NSRect) {
         guard hoverAlpha > 0, highlightsBackground else { return }
         NSColor.labelColor.withAlphaComponent(0.05 * hoverAlpha).setFill()
@@ -995,7 +997,7 @@ final class NumberBox: NSView {
 }
 
 /// Checkbox drawn in the same style as the number fields: bordered box, eased hover, accent fill when on.
-final class StyledCheckbox: NSView {
+final class StyledCheckbox: NSView, HandCursorView {
     var isOn = false { didSet { needsDisplay = true } }
     var onToggle: (() -> Void)?
     private let label = NSTextField(labelWithString: "")
@@ -1025,6 +1027,7 @@ final class StyledCheckbox: NSView {
     override func mouseEntered(with event: NSEvent) { hovered = true }
     override func mouseExited(with event: NSEvent) { hovered = false }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+    func wantsHandCursor(at point: NSPoint) -> Bool { true }
     override func mouseDown(with event: NSEvent) { isOn.toggle(); onToggle?() }
     override var allowsVibrancy: Bool { false }
     override func draw(_ dirtyRect: NSRect) {
@@ -1043,12 +1046,57 @@ final class StyledCheckbox: NSView {
 }
 
 /// Text link: hand cursor on hover, like a web link.
-final class LinkButton: NSButton {
+// MARK: - Pointing hand
+// AppKit's cursor rects only work in the key window of the active app. Siesta's panel is often on
+// screen without being either: the detached window floats over other apps, and the popover can open
+// without Siesta becoming active. The tracker follows the mouse over the whole panel all the same and
+// shows the pointing hand over every view that asks for it; the cursor rects stay for the active case.
+protocol HandCursorView: AnyObject {
+    /// `point` is in the view's own coordinates.
+    func wantsHandCursor(at point: NSPoint) -> Bool
+}
+
+// An app that is not frontmost cannot change the cursor unless its window-server connection allows
+// it: the same private switch menu bar utilities use. Without it the hand silently stays an arrow.
+@_silgen_name("_CGSDefaultConnection") private func _CGSDefaultConnection() -> Int32
+@_silgen_name("CGSSetConnectionProperty") private func CGSSetConnectionProperty(_ cid: Int32, _ target: Int32, _ key: CFString, _ value: CFTypeRef) -> Int32
+
+final class HandCursorTracker: NSResponder {
+    private weak var root: NSView?
+    private var showingHand = false
+    private let debug = CommandLine.arguments.contains("--debug-cursor")
+    func attach(to view: NSView) {
+        let cid = _CGSDefaultConnection()
+        let result = CGSSetConnectionProperty(cid, cid, "SetsCursorInBackground" as CFString, kCFBooleanTrue)
+        if debug { print("SetsCursorInBackground → \(result)"); fflush(stdout) }
+        root = view
+        view.addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil))
+    }
+    override func mouseEntered(with event: NSEvent) { update(event) }
+    override func mouseMoved(with event: NSEvent) { update(event) }
+    override func mouseExited(with event: NSEvent) { if showingHand { NSCursor.arrow.set(); showingHand = false } }
+    private func update(_ event: NSEvent) {
+        guard let root = root, root.window != nil, event.window === root.window else { return }
+        let hit = root.hitTest(root.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow)
+        var want = false
+        for view in sequence(first: hit, next: { $0?.superview }) {
+            guard let view = view else { break }
+            if let target = view as? HandCursorView { want = target.wantsHandCursor(at: view.convert(event.locationInWindow, from: nil)); break }
+            if view === root { break }
+        }
+        if debug && want != showingHand { print("\(want ? "hand" : "arrow") · app active: \(NSApp.isActive)"); fflush(stdout) }
+        if want { NSCursor.pointingHand.set(); showingHand = true }
+        else if showingHand { NSCursor.arrow.set(); showingHand = false }   // only undo our own hand, never an I-beam
+    }
+}
+
+final class LinkButton: NSButton, HandCursorView {
     override func resetCursorRects() { if isEnabled { addCursorRect(bounds, cursor: .pointingHand) } }
+    func wantsHandCursor(at point: NSPoint) -> Bool { isEnabled }
 }
 
 /// Small symbol button: secondary colour at rest, full label colour under the pointer, hand cursor.
-final class HoverIconButton: NSButton {
+final class HoverIconButton: NSButton, HandCursorView {
     var hovered = false { didSet { contentTintColor = hovered ? .labelColor : .secondaryLabelColor } }
     init(symbol: String, pointSize: CGFloat, label: String) {
         super.init(frame: .zero)
@@ -1067,11 +1115,12 @@ final class HoverIconButton: NSButton {
     override func mouseEntered(with event: NSEvent) { hovered = true }
     override func mouseExited(with event: NSEvent) { hovered = false }
     override func resetCursorRects() { if isEnabled { addCursorRect(bounds, cursor: .pointingHand) } }
+    func wantsHandCursor(at point: NSPoint) -> Bool { isEnabled && !isHidden && alphaValue > 0 }
 }
 
 /// Flat button in the prototype style: rounded 8 pt, thin border, generous padding.
 /// Primary = accent fill with white text; secondary = subtle fill with label text.
-final class FlatButton: NSButton {
+final class FlatButton: NSButton, HandCursorView {
     let primary: Bool
     var hoverFill: NSColor?          // e.g. red for a destructive action
     init(title: String, primary: Bool) {
@@ -1107,6 +1156,7 @@ final class FlatButton: NSButton {
     override func mouseEntered(with event: NSEvent) { hovered = true }
     override func mouseExited(with event: NSEvent) { hovered = false }
     override func resetCursorRects() { if isEnabled { addCursorRect(bounds, cursor: .pointingHand) } }
+    func wantsHandCursor(at point: NSPoint) -> Bool { isEnabled }
     override var wantsUpdateLayer: Bool { true }
     override func updateLayer() {
         let fill: NSColor?, border: NSColor
@@ -1136,6 +1186,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     // MARK: UI
     var statusItem: NSStatusItem!
     let panelController = NSViewController()
+    let handCursor = HandCursorTracker()
     let popover = NSPopover()
     var window: NSWindow?
     var panelWidth: NSLayoutConstraint!
@@ -1400,6 +1451,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         ])
         background.autoresizingMask = [.width, .height]   // follow the popover / window content area
         panelController.view = background
+        handCursor.attach(to: background)
         showPlaceholder()
         popover.behavior = .transient
         popover.animates = true
