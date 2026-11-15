@@ -1312,6 +1312,35 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in self?.checkForUpdate() }
         refresh()
         if CommandLine.arguments.contains("--start") { toggleRun() }
+        if let i = CommandLine.arguments.firstIndex(of: "--debug-panel"), i + 1 < CommandLine.arguments.count {
+            // renders the whole panel at popover width, off screen, into a PNG (2x), then quits
+            let out = URL(fileURLWithPath: CommandLine.arguments[i + 1])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                self.layoutPanel()
+                let view = self.panelController.view
+                let size = view.fittingSize
+                let host = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: true)
+                host.appearance = NSApp.appearance
+                self.popover.contentViewController = nil
+                host.contentView = view
+                view.layoutSubtreeIfNeeded()
+                let draw = { () -> NSBitmapImageRep in
+                    let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)!
+                    view.cacheDisplay(in: view.bounds, to: rep); return rep
+                }
+                _ = draw(); view.layoutSubtreeIfNeeded()
+                let rep = draw()
+                let dark = (NSApp.appearance ?? view.effectiveAppearance).bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                let image = NSImage(size: view.bounds.size)
+                image.lockFocus()
+                NSColor(white: dark ? 0.17 : 0.93, alpha: 1).setFill(); view.bounds.fill()
+                rep.draw(in: view.bounds, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+                image.unlockFocus()
+                if let tiff = image.tiffRepresentation { try? NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])?.write(to: out) }
+                print("Wrote \(out.path) \(size)"); fflush(stdout)
+                NSApp.terminate(nil)
+            }
+        }
         if debugLogAnimation {   // toggles the log twice (back to how it was), printing each frame, then quits
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.showPanel() }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.toggleLog() }
