@@ -320,6 +320,24 @@ final class ChartView: NSView {
         hoverT = min(t, min(last.t, range.end))
     }
     override func mouseExited(with event: NSEvent) { hoverT = nil; hoveredArrow = 0 }
+
+    /// Magnetic rest bands: near the edge of a rest band the hover line sticks to the change.
+    var magneticBands = true
+    static let magnetPixels: Double = 6
+    /// Within `magnetPixels` of a change between work and rest, the sample the hover should show:
+    /// always the last one before the change. At the start of a rest that is the encoder's CPU and
+    /// temperature as the pause begins; at its end, the temperature the rest reached before work resumes.
+    /// A band edge is drawn at the first sample of the new state: that is `edge`, where the hover line goes.
+    static func magnet(_ samples: [Sample], at t: TimeInterval, secondsPerPixel: Double) -> (sample: Sample, edge: TimeInterval)? {
+        guard samples.count > 1, secondsPerPixel > 0 else { return nil }
+        var best: (px: Double, sample: Sample, edge: TimeInterval)? = nil
+        for i in 1..<samples.count where samples[i].resting != samples[i - 1].resting {
+            let px = abs(samples[i].t - t) / secondsPerPixel
+            if px <= magnetPixels && px < (best?.px ?? .infinity) { best = (px, samples[i - 1], samples[i].t) }
+        }
+        return best.map { ($0.sample, $0.edge) }
+    }
+
     func visibleSamples(_ a: TimeInterval, _ b: TimeInterval) -> [Sample] { samples.filter { $0.t >= a && $0.t <= b } }
     /// The left edge may sit anywhere from the first sample up to a few seconds before the newest one:
     /// empty space on the right is fine (the view fills up as time passes), empty space on the left is not.
@@ -538,8 +556,13 @@ final class ChartView: NSView {
         geom = (plotLeft, plotRight, tStart, w, plotsBottom, plotsTop)
         func x(_ t: TimeInterval) -> CGFloat { plotLeft + CGFloat((t - tStart) / w) * plotW }
         // the sample under the cursor, if any: it takes over the right-hand values and the axis
-        let hovered: Sample? = hoverT.flatMap { ht in visibleSamples(tStart, tEnd).min { abs($0.t - ht) < abs($1.t - ht) } }
-            .flatMap { abs($0.t - hoverT!) < 30 ? $0 : nil }
+        // (with magnetic bands, near a band edge: the last sample before the change, the line on the edge)
+        let hover: (sample: Sample, t: TimeInterval)? = hoverT.flatMap { ht in
+            let near = visibleSamples(tStart, tEnd)
+            if magneticBands, let snap = ChartView.magnet(near, at: ht, secondsPerPixel: w / Double(plotW)) { return (snap.sample, snap.edge) }
+            return near.min { abs($0.t - ht) < abs($1.t - ht) }.flatMap { abs($0.t - ht) < 30 ? ($0, $0.t) : nil }
+        }
+        let hovered = hover?.sample
 
         NSGraphicsContext.saveGraphicsState()
         NSBezierPath(rect: NSRect(x: plotLeft, y: plotsBottom, width: plotW, height: plotsTop - plotsBottom)).addClip()
@@ -627,8 +650,8 @@ final class ChartView: NSView {
         text("\(Int(shown.cpu))%", NSPoint(x: bounds.width, y: cpuLane.midY), cpuColor, .semibold, right: true)
         text(shown.temp.map { "\(Int($0.rounded()))°C" } ?? "n/a", NSPoint(x: bounds.width, y: tempLane.midY), tempColor, .semibold, right: true)
         // hover cursor: solid line and dots at the hovered sample
-        if let hv = hovered {
-            let hx = x(hv.t)
+        if let hv = hovered, let hoverAt = hover?.t {
+            let hx = x(hoverAt)
             let line = NSBezierPath(); line.move(to: NSPoint(x: hx, y: plotsBottom)); line.line(to: NSPoint(x: hx, y: plotsTop))
             line.lineWidth = 1; NSColor.labelColor.withAlphaComponent(0.6).setStroke(); line.stroke()
             func hdot(_ v: Double, lane: NSRect, maxV: Double, minV: Double, _ color: NSColor) {
@@ -641,7 +664,7 @@ final class ChartView: NSView {
         // time axis: the start time flush left, "Now" at the right, the others spread evenly in between
         let labelCount = min(bounds.width > 420 ? 6 : 4, max(2, Int(w / 60)))   // never closer than a minute
         let f = DateFormatter(); f.dateFormat = w < 120 ? "HH:mm:ss" : "HH:mm"
-        let hx: CGFloat? = hovered.map { x($0.t) }
+        let hx: CGFloat? = hover.map { x($0.t) }
         var previous = ""
         for i in 0..<labelCount {
             let t = tStart + w * Double(i) / Double(labelCount)          // spread over the visible window
@@ -655,8 +678,8 @@ final class ChartView: NSView {
             previous = label
             text(label, NSPoint(x: lx, y: 7), .secondaryLabelColor)
         }
-        if let hv = hovered, let hx = hx {
-            let label = f.string(from: Date(timeIntervalSinceReferenceDate: hv.t))
+        if let hoverAt = hover?.t, let hx = hx {
+            let label = f.string(from: Date(timeIntervalSinceReferenceDate: hoverAt))
             let lw = NSAttributedString(string: label, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)]).size().width
             let lx = min(max(hx - lw / 2, 0), bounds.width - lw)   // centred on the line, kept inside the view
             text(label, NSPoint(x: lx, y: 7), .labelColor, .semibold)
@@ -1900,6 +1923,19 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 }
 
 if CommandLine.arguments.contains("--debug-sensors") { TemperatureReader.dump(); exit(0) }
+if CommandLine.arguments.contains("--debug-magnet") {
+    // one point every 5 s: work 0–55 s, rest 60–115 s, work again from 120 s; 0.5 s per pixel
+    let samples = stride(from: 0.0, through: 180, by: 5).map { t in
+        Sample(t: t, cpu: (60..<120).contains(t) ? 0 : 80, temp: 70 + t / 10, resting: (60..<120).contains(t))
+    }
+    for t in [45.0, 56, 57, 58, 60, 62, 63, 64, 90, 115, 117, 118, 120, 123, 124, 140] {
+        let s = ChartView.magnet(samples, at: t, secondsPerPixel: 0.5)
+        print(String(format: "cursor %5.1f s (%+5.1f px from the nearest edge) → %@", t,
+                     ([60.0, 120].map { ($0 - t) / -0.5 }.min { abs($0) < abs($1) })!,
+                     s.map { String(format: "line on %.0f s, values of %.0f s (%@, CPU %.0f%%)", $0.edge, $0.sample.t, $0.sample.resting ? "resting" : "working", $0.sample.cpu) } ?? "no snap"))
+    }
+    exit(0)
+}
 let app = NSApplication.shared
 let delegate = App()
 app.delegate = delegate
