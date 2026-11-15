@@ -59,7 +59,7 @@ You can change Work and Rest while the cycle runs: the new value applies as soon
 ## See the cycle unfold
 #### Open the graph to follow CPU load, temperature and scheduled rests.
 
-Expand **CPU & temperature** to see the recent history. The blue line is the encoder's CPU usage as a share of the whole Mac, from 0% to 100%; the orange line is the hottest CPU die. The shaded bands mark scheduled rests: CPU usage falls while the worker is paused, and the temperature line shows how the Mac responds.
+Expand **CPU & temperature** to see the recent history. The blue line is the encoder's CPU usage as a share of the whole Mac, from 0% to 100%; the orange line is the hottest CPU core. The shaded bands mark scheduled rests: CPU usage falls while the worker is paused, and the temperature line shows how the Mac responds.
 
 The chart starts with a five-minute view, grows with the session, and then keeps a rolling six-hour history. Hovering over the plot shows the readings and the time of that moment. Pinch on the trackpad or use the mouse wheel over the plot to zoom around the cursor, down to one minute and never beyond the recorded history. Scroll sideways with two fingers, or drag the plot, to move back and forth in time; a chevron at the right edge means newer data is waiting and clicking it jumps back to now, while the one at the left edge jumps to the start of the history, both keeping the current zoom. Click **Reset** or double-click the plot to return to the automatic view.
 

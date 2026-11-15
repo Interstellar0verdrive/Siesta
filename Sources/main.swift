@@ -23,10 +23,12 @@ let target = Target(name: "HandBrake", bundleMarker: "HandBrake.app/", workerMar
 let popoverWidth: CGFloat = 380
 let windowWidth: CGFloat = 455
 
-// MARK: - Temperature (hottest CPU die sensor)
-// Apple Silicon exposes no public API for die temperatures; this is the private IOHID
-// sensor interface used by the usual menu bar monitors. If it ever stops working the
-// chart simply shows no temperature line.
+// MARK: - Temperature (hottest CPU core)
+// Apple Silicon has no public API for core temperatures. The first source is the SMC, through
+// the AppleSMC driver: the per-core keys that Stats shows as "Hottest CPU". When no SMC key
+// answers, the private IOHID die sensors ("PMU tdie") are used; they read the whole package and
+// stay about 20 °C below the hottest core under load. If neither works the chart simply shows
+// no temperature line.
 private typealias IOHIDEventSystemClientRef = CFTypeRef
 private typealias IOHIDServiceClientRef = CFTypeRef
 private typealias IOHIDEventRef = CFTypeRef
@@ -37,11 +39,88 @@ private typealias IOHIDEventRef = CFTypeRef
 @_silgen_name("IOHIDServiceClientCopyEvent") private func IOHIDServiceClientCopyEvent(_ s: IOHIDServiceClientRef, _ t: Int64, _ o: Int32, _ ts: Int64) -> IOHIDEventRef?
 @_silgen_name("IOHIDEventGetFloatValue") private func IOHIDEventGetFloatValue(_ e: IOHIDEventRef, _ f: Int32) -> Double
 
+/// Minimal reader for the SMC's float temperature keys.
+private final class SMC {
+    private var conn: io_connect_t = 0
+
+    init?() {
+        let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSMC"))
+        guard service != 0 else { return nil }
+        defer { IOObjectRelease(service) }
+        guard IOServiceOpen(service, mach_task_self_, 0, &conn) == KERN_SUCCESS else { return nil }
+    }
+    deinit { if conn != 0 { IOServiceClose(conn) } }
+
+    static func code(_ s: String) -> UInt32 { s.utf8.reduce(0) { $0 << 8 | UInt32($1) } }
+    static func name(_ c: UInt32) -> String {
+        String(bytes: [24, 16, 8, 0].map { UInt8(truncatingIfNeeded: c >> $0) }, encoding: .ascii) ?? "?"
+    }
+
+    // The driver's SMCKeyData_t, 80 bytes: key @0, dataSize @28, dataType @32, result @40,
+    // command @42, index @44, data @48.
+    private func call(command: UInt8, key: UInt32 = 0, size: UInt32 = 0, index: UInt32 = 0) -> [UInt8]? {
+        var input = [UInt8](repeating: 0, count: 80), output = [UInt8](repeating: 0, count: 80)
+        input.withUnsafeMutableBytes {
+            $0.storeBytes(of: key, toByteOffset: 0, as: UInt32.self)
+            $0.storeBytes(of: size, toByteOffset: 28, as: UInt32.self)
+            $0.storeBytes(of: command, toByteOffset: 42, as: UInt8.self)
+            $0.storeBytes(of: index, toByteOffset: 44, as: UInt32.self)
+        }
+        var outSize = 80
+        guard IOConnectCallStructMethod(conn, 2, &input, 80, &output, &outSize) == KERN_SUCCESS, output[40] == 0 else { return nil }
+        return output
+    }
+    private func u32(_ b: [UInt8], _ at: Int) -> UInt32 { b.withUnsafeBytes { $0.load(fromByteOffset: at, as: UInt32.self) } }
+
+    /// True when `key` exists and holds a 4-byte float.
+    func isFloat(_ key: UInt32) -> Bool {
+        guard let info = call(command: 9, key: key) else { return false }
+        return u32(info, 28) == 4 && u32(info, 32) == SMC.code("flt ")
+    }
+    func float(_ key: UInt32) -> Double? {
+        guard let out = call(command: 5, key: key, size: 4) else { return nil }
+        return Double(out.withUnsafeBytes { $0.load(fromByteOffset: 48, as: Float32.self) })
+    }
+    /// Every key the SMC knows (a few thousand): used only to find sensors once, never per sample.
+    func allKeys() -> [UInt32] {
+        let countKey = SMC.code("#KEY")
+        guard let info = call(command: 9, key: countKey), let out = call(command: 5, key: countKey, size: u32(info, 28)) else { return [] }
+        let count = UInt32(out[48]) << 24 | UInt32(out[49]) << 16 | UInt32(out[50]) << 8 | UInt32(out[51])
+        return (0..<count).compactMap { i in call(command: 8, index: i).map { u32($0, 0) } }
+    }
+}
+
 final class TemperatureReader {
+    /// The keys Stats lists as "CPU efficiency core 1-4" and "CPU performance core 1-8" on the M4
+    /// family; the ones a given chip lacks are skipped. On other chips every Tp* (performance
+    /// cluster) and Te* (efficiency cluster) float key is used.
+    static let m4CoreKeys = ["Te05", "Te0S", "Te09", "Te0H", "Tp01", "Tp05", "Tp09", "Tp0D", "Tp0V", "Tp0Y", "Tp0b", "Tp0e"]
+
+    private let smc = SMC()
+    private(set) var coreKeys: [UInt32] = []
     private var client: IOHIDEventSystemClientRef?
     private var dieSensors: [IOHIDServiceClientRef] = []
+
+    static var chip: String {
+        var size = 0
+        sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0)
+        var buffer = [CChar](repeating: 0, count: max(1, size))
+        sysctlbyname("machdep.cpu.brand_string", &buffer, &size, nil, 0)
+        return String(cString: buffer)
+    }
+
     init() {
-        guard let c = IOHIDEventSystemClientCreate(kCFAllocatorDefault) else { return }
+        if let smc {
+            if TemperatureReader.chip.contains("M4") {
+                coreKeys = TemperatureReader.m4CoreKeys.map(SMC.code).filter { smc.isFloat($0) && smc.float($0) != nil }
+            } else {
+                coreKeys = smc.allKeys().filter {
+                    let n = SMC.name($0)
+                    return (n.hasPrefix("Tp") || n.hasPrefix("Te")) && smc.isFloat($0)
+                }
+            }
+        }
+        guard coreKeys.isEmpty, let c = IOHIDEventSystemClientCreate(kCFAllocatorDefault) else { return }
         _ = IOHIDEventSystemClientSetMatching(c, ["PrimaryUsagePage": 0xff00, "PrimaryUsage": 5] as CFDictionary)
         client = c
         let services = IOHIDEventSystemClientCopyServices(c) as? [IOHIDServiceClientRef] ?? []
@@ -49,15 +128,50 @@ final class TemperatureReader {
             (IOHIDServiceClientCopyProperty($0, "Product" as CFString) as? String)?.lowercased().contains("tdie") == true
         }
     }
-    /// Hottest CPU die in °C, nil when no sensor is readable.
+
+    /// Hottest CPU core in °C, nil when no sensor is readable.
     func hottest() -> Double? {
         var best: Double? = nil
+        if let smc, !coreKeys.isEmpty {
+            for k in coreKeys { if let v = smc.float(k), v > 0 && v < 150 { best = max(best ?? 0, v) } }
+            return best
+        }
         for s in dieSensors {
             guard let e = IOHIDServiceClientCopyEvent(s, 15, 0, 0) else { continue }
             let v = IOHIDEventGetFloatValue(e, 15 << 16)
             if v > 0 && v < 150 { best = max(best ?? 0, v) }
         }
         return best
+    }
+
+    /// `--debug-sensors`: prints the source in use, then every SMC temperature key and every IOHID
+    /// temperature sensor with its current value, for comparing against other monitors.
+    static func dump() {
+        let reader = TemperatureReader()
+        print("Chip: \(chip)")
+        if let smc = reader.smc, !reader.coreKeys.isEmpty {
+            let values = reader.coreKeys.map { "\(SMC.name($0)) \(smc.float($0).map { String(format: "%.1f", $0) } ?? "–")" }
+            print("Source: SMC core keys (\(reader.coreKeys.count)): " + values.joined(separator: "  "))
+        } else {
+            print("Source: IOHID PMU tdie (\(reader.dieSensors.count) sensors)")
+        }
+        print("Hottest: \(reader.hottest().map { String(format: "%.1f °C", $0) } ?? "none")")
+        if let smc = SMC() {
+            print("\nSMC temperature keys:")
+            for k in smc.allKeys() where SMC.name(k).hasPrefix("T") && smc.isFloat(k) {
+                if let v = smc.float(k), v > 0 && v < 150 { print(String(format: "  %@ %6.1f", SMC.name(k), v)) }
+            }
+        }
+        print("\nIOHID temperature sensors:")
+        if let c = IOHIDEventSystemClientCreate(kCFAllocatorDefault) {
+            _ = IOHIDEventSystemClientSetMatching(c, ["PrimaryUsagePage": 0xff00, "PrimaryUsage": 5] as CFDictionary)
+            for s in IOHIDEventSystemClientCopyServices(c) as? [IOHIDServiceClientRef] ?? [] {
+                let name = IOHIDServiceClientCopyProperty(s, "Product" as CFString) as? String ?? "?"
+                guard let e = IOHIDServiceClientCopyEvent(s, 15, 0, 0) else { continue }
+                let v = IOHIDEventGetFloatValue(e, 15 << 16)
+                if v > 0 && v < 150 { print(String(format: "  %6.1f  %@", v, name)) }
+            }
+        }
     }
 }
 
@@ -1785,6 +1899,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     }
 }
 
+if CommandLine.arguments.contains("--debug-sensors") { TemperatureReader.dump(); exit(0) }
 let app = NSApplication.shared
 let delegate = App()
 app.delegate = delegate
