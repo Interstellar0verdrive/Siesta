@@ -1759,6 +1759,10 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let cpu = cpuSum / Double(cpuTicks)
         cpuSum = 0; cpuTicks = 0
         chart.samples.append(Sample(t: t, cpu: cpu, temp: thermometer.hottest(), resting: phase == .resting))
+        if debugSamples, let s = chart.samples.last {
+            debugPrint(String(format: "SAMPLE cpu %.1f%% of the Mac (%.0f%% of one core)  temp %@  %@", s.cpu, s.cpu * coreCount,
+                              s.temp.map { String(format: "%.1f °C", $0) } ?? "n/a", s.resting ? "resting" : "working"))
+        }
         chart.noteNewSample()
         if let first = chart.samples.first?.t, t - first > chart.maxWindow + 60 {
             chart.samples.removeFirst(chart.samples.count / 10)   // trim in chunks, cheap
@@ -1837,7 +1841,16 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             .font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.secondaryLabelColor]))
     }
 
+    /// `--debug-samples`: every log line and chart point also goes to stdout, for checking the numbers in a test run.
+    let debugSamples = CommandLine.arguments.contains("--debug-samples")
+    func debugPrint(_ s: String) {
+        guard debugSamples else { return }
+        let f = DateFormatter(); f.dateFormat = "HH:mm:ss"
+        print("\(f.string(from: Date())) \(s)"); fflush(stdout)
+    }
+
     func log(_ s: String) {
+        debugPrint("LOG " + s)
         if logCount == 0 { logView.textStorage?.setAttributedString(NSAttributedString(string: "")) }
         let f = DateFormatter(); f.dateFormat = "HH:mm"
         let para = NSMutableParagraphStyle()
