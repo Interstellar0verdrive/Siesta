@@ -59,6 +59,77 @@ final class TemperatureReader {
     }
 }
 
+// MARK: - Processes
+struct Proc { let pid: pid_t; let cpu: Double; let path: String; let frozen: Bool }
+
+/// Finds the target app's processes and their CPU straight from the kernel (libproc), with no
+/// pgrep/ps child processes every second. CPU is the share of one core (100 = one core busy) over
+/// the time since the previous call, like the %CPU column of `top`.
+final class ProcessSampler {
+    private let marker: String
+    private var pids = [pid_t](repeating: 0, count: 2048)
+    private var pathBuffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+    /// Executable path of each pid seen so far, nil when it is not a target process. Reading the
+    /// path is the costly call, so it happens once per pid; the cache is dropped every `rescanEvery`
+    /// calls to catch a process that exec'd into the target after it was first seen.
+    private var known: [pid_t: String?] = [:]
+    private var calls = 0
+    private let rescanEvery = 60
+    /// CPU time (mach ticks, like mach_absolute_time) of each target pid at the previous call.
+    private var previous: [pid_t: (cpu: UInt64, at: UInt64)] = [:]
+
+    init(marker: String) { self.marker = marker }
+
+    func sample() -> [Proc] {
+        var n = 0
+        while true {
+            let bytes = Int32(pids.count * MemoryLayout<pid_t>.stride)
+            n = Int(pids.withUnsafeMutableBytes { proc_listallpids($0.baseAddress, bytes) })
+            if n < pids.count { break }
+            pids = [pid_t](repeating: 0, count: pids.count * 2)   // more processes than room: grow and retry
+        }
+        calls += 1
+        if calls % rescanEvery == 0 { known.removeAll(keepingCapacity: true) }
+        let now = mach_absolute_time()
+        var alive = Set<pid_t>(minimumCapacity: max(0, n))
+        var seen: [pid_t: (cpu: UInt64, at: UInt64)] = [:]
+        var result: [Proc] = []
+        for i in 0..<max(0, n) {
+            let pid = pids[i]
+            guard pid > 0 else { continue }
+            alive.insert(pid)
+            let path: String
+            if let cached = known[pid] {
+                guard let p = cached else { continue }
+                path = p
+            } else {
+                guard proc_pidpath(pid, &pathBuffer, UInt32(pathBuffer.count)) > 0 else { continue }   // gone, or not readable
+                let p = String(cString: pathBuffer)
+                let match = p.contains(marker)
+                known[pid] = .some(match ? p : nil)   // .some(nil) remembers "not a target"; a bare nil would delete the key
+                guard match else { continue }
+                path = p
+            }
+            var task = proc_taskinfo()
+            let taskSize = Int32(MemoryLayout<proc_taskinfo>.stride)
+            guard proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &task, taskSize) == taskSize else { continue }
+            let cpuTicks = task.pti_total_user + task.pti_total_system
+            var cpu = 0.0
+            if let p = previous[pid], now > p.at, cpuTicks >= p.cpu {
+                cpu = Double(cpuTicks - p.cpu) / Double(now - p.at) * 100
+            }
+            seen[pid] = (cpuTicks, now)
+            var bsd = proc_bsdinfo()
+            let bsdSize = Int32(MemoryLayout<proc_bsdinfo>.stride)
+            let frozen = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsd, bsdSize) == bsdSize && bsd.pbi_status == UInt32(SSTOP)
+            result.append(Proc(pid: pid, cpu: cpu, path: path, frozen: frozen))
+        }
+        previous = seen
+        if known.count > alive.count + 64 { known = known.filter { alive.contains($0.key) } }
+        return result
+    }
+}
+
 // MARK: - CPU & temperature chart
 struct Sample { let t: TimeInterval; let cpu: Double; let temp: Double?; let resting: Bool }
 
@@ -1515,33 +1586,11 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     }
 
     // MARK: Processes
-    struct Proc { let pid: pid_t; let cpu: Double; let path: String; let frozen: Bool }
-
-    func run(_ exe: String, _ args: [String]) -> String {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: exe)
-        p.arguments = args
-        let pipe = Pipe(); p.standardOutput = pipe
-        do { try p.run() } catch { return "" }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()   // read before waiting, or large output deadlocks
-        p.waitUntilExit()
-        return String(data: data, encoding: .utf8) ?? ""
-    }
+    let sampler = ProcessSampler(marker: target.bundleMarker)
 
     /// Every process belonging to the target app: the UI and the workers that do the real encoding.
-    func targetProcesses() -> [Proc] {
-        let pids = run("/usr/bin/pgrep", ["-f", target.bundleMarker])
-            .split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        guard !pids.isEmpty else { return [] }
-        let out = run("/bin/ps", ["-o", "pid=,%cpu=,stat=,comm=", "-p", pids.joined(separator: ",")])
-        return out.split(separator: "\n").compactMap { line in
-            let parts = line.trimmingCharacters(in: .whitespaces).split(separator: " ", maxSplits: 3)
-                .map { $0.trimmingCharacters(in: .whitespaces) }
-            guard parts.count == 4, let pid = Int32(parts[0]), let cpu = Double(parts[1]),
-                  parts[3].contains(target.bundleMarker) else { return nil }
-            return Proc(pid: pid, cpu: cpu, path: parts[3], frozen: parts[2].hasPrefix("T"))
-        }
-    }
+    /// Called once per tick (and once at launch): the CPU of each call covers the time since the previous one.
+    func targetProcesses() -> [Proc] { sampler.sample() }
 
     func resume() {
         for pid in frozenPids { kill(pid, SIGCONT) }
@@ -1562,11 +1611,14 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     func percentOfMachine(_ cpu: Double) -> Double { min(100, cpu / coreCount) }
 
     func record(cpu rawCpu: Double) {
-        let cpu = percentOfMachine(rawCpu)
+        // each tick measures only its own second: a chart point is the mean of the ticks since the last one
+        cpuSum += percentOfMachine(rawCpu); cpuTicks += 1
         let t = Date.timeIntervalSinceReferenceDate
         // dense while the chart is still filling its first 5 minutes, then one point every 5 s
         let every: TimeInterval = (chart.samples.first.map { t - $0.t } ?? 0) < chart.minWindow ? 1 : 5
         if let last = chart.samples.last?.t, t - last < every - 0.5 { return }
+        let cpu = cpuSum / Double(cpuTicks)
+        cpuSum = 0; cpuTicks = 0
         chart.samples.append(Sample(t: t, cpu: cpu, temp: thermometer.hottest(), resting: phase == .resting))
         chart.noteNewSample()
         if let first = chart.samples.first?.t, t - first > chart.maxWindow + 60 {
@@ -1579,6 +1631,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         }
     }
     var lastCollapsedRefresh: TimeInterval = 0
+    var cpuSum = 0.0, cpuTicks = 0
 
     func tick() {
         let now = Date()
