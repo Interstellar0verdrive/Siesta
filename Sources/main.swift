@@ -321,6 +321,38 @@ final class ChartView: NSView {
     }
     override func mouseExited(with event: NSEvent) { hoverT = nil; hoveredArrow = 0 }
 
+    /// Smooth lines when the chart holds more samples than pixels (straight segments when zoomed in).
+    var smoothCurves = true
+    static func polyline(_ pts: [NSPoint]) -> NSBezierPath {
+        let p = NSBezierPath(); p.lineWidth = 1.5; p.lineJoinStyle = .round
+        for (i, pt) in pts.enumerated() { if i == 0 { p.move(to: pt) } else { p.line(to: pt) } }
+        return p
+    }
+    /// Monotone cubic through the points (Fritsch–Carlson): round, yet never above or below its
+    /// neighbours, so a curve can't overshoot the lane or invent a peak the data doesn't have.
+    static func monotoneCurve(_ pts: [NSPoint]) -> NSBezierPath {
+        guard pts.count > 2 else { return polyline(pts) }
+        let n = pts.count
+        var d = [CGFloat](repeating: 0, count: n - 1)
+        for i in 0..<n - 1 { d[i] = (pts[i + 1].y - pts[i].y) / max(0.0001, pts[i + 1].x - pts[i].x) }
+        var m = [CGFloat](repeating: 0, count: n)
+        m[0] = d[0]; m[n - 1] = d[n - 2]
+        for i in 1..<n - 1 { m[i] = d[i - 1] * d[i] <= 0 ? 0 : (d[i - 1] + d[i]) / 2 }
+        for i in 0..<n - 1 {
+            if d[i] == 0 { m[i] = 0; m[i + 1] = 0; continue }
+            let a = m[i] / d[i], b = m[i + 1] / d[i], h = a * a + b * b
+            if h > 9 { let t = 3 / h.squareRoot(); m[i] = t * a * d[i]; m[i + 1] = t * b * d[i] }
+        }
+        let p = NSBezierPath(); p.lineWidth = 1.5; p.lineJoinStyle = .round
+        p.move(to: pts[0])
+        for i in 0..<n - 1 {
+            let h = (pts[i + 1].x - pts[i].x) / 3
+            p.curve(to: pts[i + 1], controlPoint1: NSPoint(x: pts[i].x + h, y: pts[i].y + m[i] * h),
+                    controlPoint2: NSPoint(x: pts[i + 1].x - h, y: pts[i + 1].y - m[i + 1] * h))
+        }
+        return p
+    }
+
     /// Magnetic rest bands: near the edge of a rest band the hover line sticks to the change.
     var magneticBands = true
     static let magnetPixels: Double = 6
@@ -582,26 +614,31 @@ final class ChartView: NSView {
         for y in [cpuLane.minY - gap / 2, tempLane.minY] {
             let b = NSBezierPath(); b.move(to: NSPoint(x: plotLeft, y: y)); b.line(to: NSPoint(x: plotRight, y: y)); b.lineWidth = 1; b.stroke()
         }
-        // lines, one point per pixel column (mean of the samples in that column)
+        // lines: zoomed in, straight segments between the real samples; with more samples than pixels,
+        // the means of buckets a few pixels wide joined by a smooth curve
         let visible = samples.filter { $0.t >= tStart && $0.t <= tEnd }
+        let density = Double(visible.count) / Double(plotW)          // samples per pixel
+        let smooth = smoothCurves && density > 1
+        let bucketPx = smooth ? min(4, max(1, density.rounded())) : 1
+        // buckets are anchored in time, not on the screen, so they hold still while the view scrolls; a bucket
+        // never spans a change between work and rest, so even a short rest keeps its dip when zoomed far out
+        let bucketSeconds = bucketPx * w / Double(plotW)
         func path(_ value: (Sample) -> Double?, lane: NSRect, maxV: Double, minV: Double) -> NSBezierPath {
-            let p = NSBezierPath(); p.lineWidth = 1.5; p.lineJoinStyle = .round
-            var col = -1, acc = 0.0, n = 0, started = false
-            func flush(_ c: Int) {
+            var points: [NSPoint] = []
+            var bucket = Int.min, resting = false, accV = 0.0, accX = 0.0, n = 0
+            func flush() {
                 guard n > 0 else { return }
-                let v = acc / Double(n)
-                let py = lane.minY + CGFloat((v - minV) / max(1, maxV - minV)) * lane.height
-                let pt = NSPoint(x: plotLeft + CGFloat(c), y: min(lane.maxY, max(lane.minY, py)))
-                if started { p.line(to: pt) } else { p.move(to: pt); started = true }
+                let py = lane.minY + CGFloat((accV / Double(n) - minV) / max(1, maxV - minV)) * lane.height
+                points.append(NSPoint(x: CGFloat(accX / Double(n)), y: min(lane.maxY, max(lane.minY, py))))
             }
             for smp in visible {
                 guard let v = value(smp) else { continue }
-                let c = Int(x(smp.t) - plotLeft)
-                if c != col { flush(col); col = c; acc = 0; n = 0 }
-                acc += v; n += 1
+                let k = Int(floor(smp.t / bucketSeconds))
+                if k != bucket || smp.resting != resting { flush(); bucket = k; resting = smp.resting; accV = 0; accX = 0; n = 0 }
+                accV += v; accX += Double(x(smp.t)); n += 1
             }
-            flush(col)
-            return p
+            flush()
+            return smooth ? ChartView.monotoneCurve(points) : ChartView.polyline(points)
         }
         cpuColor.setStroke()
         path({ $0.cpu }, lane: cpuLane, maxV: cpuMax, minV: 0).stroke()
@@ -1936,6 +1973,55 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 }
 
 if CommandLine.arguments.contains("--debug-sensors") { TemperatureReader.dump(); exit(0) }
+if let i = CommandLine.arguments.firstIndex(of: "--debug-chart"), i + 1 < CommandLine.arguments.count {
+    // renders the chart off screen on 6 hours of synthetic data (15 min work, 1 min rest), at several
+    // zoom levels, straight lines on the left and smooth curves on the right, into one PNG
+    var seed: UInt64 = 42
+    func noise() -> Double { seed = seed &* 6364136223846793005 &+ 1442695040888963407; return Double(seed >> 11) / Double(1 << 53) - 0.5 }
+    let end = Date.timeIntervalSinceReferenceDate, start = end - 6 * 3600
+    var samples: [Sample] = [], temp = 60.0, load = 80.0
+    for t in stride(from: start, through: end, by: 5) {
+        let resting = Int((t - start) / 60) % 16 == 15
+        load = min(95, max(55, load + noise() * 8))
+        temp += ((resting ? 53 : 104) - temp) * (resting ? 0.22 : 0.3) + noise() * 2.5
+        samples.append(Sample(t: t, cpu: resting ? 0 : load, temp: temp, resting: resting))
+    }
+    let width: CGFloat = 380, spans: [TimeInterval] = [6 * 3600, 3600, 15 * 60, 3 * 60]
+    let probe = ChartView()
+    let cell = NSSize(width: width, height: probe.fullHeight), pad: CGFloat = 24
+    let sheet = NSImage(size: NSSize(width: cell.width * 2 + pad * 3, height: (cell.height + pad) * CGFloat(spans.count) + pad))
+    let dark = NSAppearance(named: .darkAqua)!
+    sheet.lockFocus()
+    NSColor(white: 0.12, alpha: 1).setFill(); NSRect(origin: .zero, size: sheet.size).fill()
+    for (row, span) in spans.enumerated() {
+        for (col, smooth) in [false, true].enumerated() {
+            let chart = ChartView()
+            chart.appearance = dark
+            chart.frame = NSRect(origin: .zero, size: cell)
+            chart.samples = samples; chart.smoothCurves = smooth
+            chart.view = (end - span, span); chart.followNow = true
+            chart.layoutSubtreeIfNeeded()
+            guard let rep = chart.bitmapImageRepForCachingDisplay(in: chart.bounds) else { continue }
+            dark.performAsCurrentDrawingAppearance { chart.cacheDisplay(in: chart.bounds, to: rep) }
+            let origin = NSPoint(x: pad + CGFloat(col) * (cell.width + pad), y: sheet.size.height - CGFloat(row + 1) * (cell.height + pad))
+            NSColor(white: 0.17, alpha: 1).setFill(); NSRect(origin: origin, size: cell).fill()   // the dark popover
+            rep.draw(in: NSRect(origin: origin, size: cell), from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            if let png = rep.representation(using: .png, properties: [:]) {   // each cell on its own too, transparent
+                try? png.write(to: URL(fileURLWithPath: CommandLine.arguments[i + 1]).deletingPathExtension()
+                    .appendingPathExtension("\(Int(span / 60))min-\(smooth ? "smooth" : "straight").png"))
+            }
+            let label = "\(span >= 3600 ? "\(Int(span / 3600)) h" : "\(Int(span / 60)) min") · \(smooth ? "smooth curves" : "straight lines")"
+            NSAttributedString(string: label, attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor(white: 0.6, alpha: 1)])
+                .draw(at: NSPoint(x: origin.x, y: origin.y + cell.height + 4))
+        }
+    }
+    sheet.unlockFocus()
+    let out = URL(fileURLWithPath: CommandLine.arguments[i + 1])
+    if let tiff = sheet.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+        try? png.write(to: out); print("Wrote \(out.path)")
+    }
+    exit(0)
+}
 if CommandLine.arguments.contains("--debug-magnet") {
     // one point every 5 s: work 0–55 s, rest 60–115 s, work again from 120 s; 0.5 s per pixel
     let samples = stride(from: 0.0, through: 180, by: 5).map { t in
