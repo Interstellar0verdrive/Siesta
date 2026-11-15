@@ -16,7 +16,9 @@ struct Target {
     let workerMarker: String     // substring identifying the processes that do the heavy work
 }
 
-let target = Target(name: "HandBrake", bundleMarker: "HandBrake.app/", workerMarker: "XPCServices")
+// The encoder runs in HandBrakeXPCService(2…4).xpc; a bare "XPCServices" would also catch the
+// Sparkle updater (Sparkle.framework/…/XPCServices/Downloader.xpc) and freeze it during a rest.
+let target = Target(name: "HandBrake", bundleMarker: "HandBrake.app/", workerMarker: "XPCServices/HandBrakeXPCService")
 
 let popoverWidth: CGFloat = 380
 let windowWidth: CGFloat = 455
