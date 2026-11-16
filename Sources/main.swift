@@ -379,9 +379,9 @@ final class ChartView: NSView, HandCursorView {
 
     /// Longer than this between two samples (one every 5 s) is a gap, not a slope.
     static let gapSeconds: TimeInterval = 30
-    /// Idle time cut out of the chart is marked by a strip this wide: 1 pt margin, a dotted line,
-    /// 6 pt of empty space, a dotted line, 1 pt margin.
-    static let seamStrip: CGFloat = 10
+    /// Idle time cut out of the chart is marked by a strip this wide: a dotted line, 6 pt of empty
+    /// space, a dotted line. The lines before and after it end right on the dotted lines.
+    static let seamStrip: CGFloat = 8
     /// Set while "Hold the chart while idle" holds an idle stretch long enough to be cut out.
     var holding = false { didSet { if holding != oldValue { needsDisplay = true } } }
     /// The strips drawn last: the time of the first sample after each cut and the strip's left edge.
@@ -690,7 +690,8 @@ final class ChartView: NSView, HandCursorView {
         func x(_ t: TimeInterval) -> CGFloat {
             plotLeft + CGFloat((t - tStart) / w) * dataW + strip * CGFloat(cuts.filter { $0 <= t }.count)
         }
-        strips = cuts.enumerated().map { k, c in (c, (plotLeft + CGFloat((c - tStart) / w) * dataW + strip * CGFloat(k)).rounded()) }
+        // on the half point: whole device pixels at 2x, so the dots stay sharp, and never left of the line's end
+        strips = cuts.enumerated().map { k, c in (c, ((plotLeft + CGFloat((c - tStart) / w) * dataW + strip * CGFloat(k)) * 2).rounded(.up) / 2) }
         // the sample under the cursor, if any: it takes over the right-hand values and the axis
         // (with magnetic bands, near a band edge: the last sample before the change, the line on the edge)
         let hover: (sample: Sample, t: TimeInterval)? = hoverT.flatMap { ht in
@@ -706,7 +707,7 @@ final class ChartView: NSView, HandCursorView {
         // not even the divider and the baseline
         if !strips.isEmpty {
             let clip = NSBezierPath(rect: NSRect(x: plotLeft - 1, y: 0, width: plotW + 2, height: bounds.height))
-            for s in strips { clip.appendRect(NSRect(x: s.x0 + 1, y: plotsBottom - 1, width: strip - 2, height: plotsTop - plotsBottom + 2)) }
+            for s in strips { clip.appendRect(NSRect(x: s.x0, y: plotsBottom - 1, width: strip, height: plotsTop - plotsBottom + 2)) }
             clip.windingRule = .evenOdd
             clip.addClip()
         }
@@ -771,7 +772,7 @@ final class ChartView: NSView, HandCursorView {
         // dotted, not dashed: the "Now" line is the dashed one
         NSColor.labelColor.withAlphaComponent(0.45).setStroke()
         for s in strips {
-            for lx in [s.x0 + 1.5, s.x0 + strip - 1.5] {
+            for lx in [s.x0 + 0.5, s.x0 + strip - 0.5] {
                 let l = NSBezierPath(); l.move(to: NSPoint(x: lx, y: plotsBottom)); l.line(to: NSPoint(x: lx, y: plotsTop))
                 l.lineWidth = 1; l.setLineDash([1, 2], count: 2, phase: 0); l.stroke()
             }
@@ -3119,8 +3120,10 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         if holding {
             holding = false
             // a held moment of a few seconds (a thawed encoder's first, low reading) is no stretch worth a seam
+            // the first sample after the cut goes right after the last one before it: the strip
+            // drawn between them then starts where the line ends and the line resumes where it ends
             if let lastT = chart.samples.last?.t, chartNow - lastT > every + 5 {
-                heldTime += chartNow - lastT - every
+                heldTime += chartNow - lastT - 0.01
                 cut = true
             }
         }
@@ -3446,7 +3449,7 @@ if let i = CommandLine.arguments.firstIndex(of: "--debug-hold"), i + 1 < Command
     let held = 140.0
     // `fresh`: work has only just come back (two seconds after the cut); `held`: still idle, nothing after it
     for k in 106...(CommandLine.arguments.contains("fresh") ? 107 : 130) where !CommandLine.arguments.contains("held") {
-        samples.append(Sample(t: t0 + Double(k), cpu: 40 + Double(k - 106), temp: 90 + Double(k - 106) * 0.7, resting: false, clock: t0 + Double(k) + held, cut: k == 106)) }
+        samples.append(Sample(t: t0 + Double(k) - 0.99, cpu: 40 + Double(k - 106), temp: 90 + Double(k - 106) * 0.7, resting: false, clock: t0 + Double(k) + held, cut: k == 106)) }
     let chart = ChartView()
     chart.frame = NSRect(x: 0, y: 0, width: 380, height: chart.fullHeight)
     chart.samples = samples
