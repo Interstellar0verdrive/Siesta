@@ -8,6 +8,10 @@ import CryptoKit
 
 enum Phase { case stopped, working, resting }
 
+/// The clock the panel texts and log read. `--debug-scene` pins it, so the README images show set times.
+var sceneClock: Date?
+func clockNow() -> Date { sceneClock ?? Date() }
+
 /// Describes the application being watched. Only HandBrake for now; the
 /// structure is here so other encoders can be added as profiles later.
 struct Target {
@@ -1370,7 +1374,23 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     var pausePlanned: Date?          // set when the work minutes are done: the next whole minute
     var isEncoding = false
     var frozenPids: [pid_t] = []
-    let defaults = UserDefaults.standard
+    /// `--debug-scene <working|compact|resting> <png>`: the scene to stage for the README images.
+    static let scene: String? = {
+        guard let i = CommandLine.arguments.firstIndex(of: "--debug-scene"), i + 2 < CommandLine.arguments.count else { return nil }
+        return CommandLine.arguments[i + 1]
+    }()
+    /// A staged scene keeps its settings in a throwaway domain, never in the user's own preferences.
+    let defaults: UserDefaults = {
+        guard let scene = App.scene else { return .standard }
+        let name = "io.github.interstellar0verdrive.siesta.scene"
+        let d = UserDefaults(suiteName: name)!
+        d.removePersistentDomain(forName: name)
+        d.set(30, forKey: "work"); d.set(5, forKey: "rest")
+        d.set(scene == "resting", forKey: "window")
+        d.set(scene != "working", forKey: "chartCollapsed")
+        d.set(scene == "resting", forKey: "logExpanded")
+        return d
+    }()
     var threshold: Double { defaults.object(forKey: "threshold") == nil ? 50.0 : defaults.double(forKey: "threshold") }
     // the cycle uses the committed values, not what is being typed in the fields
     var committedWork = 60
@@ -1416,6 +1436,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         committedRest = restField.integerValue
         detachCheckbox.isOn = detached
         logExpanded = defaults.bool(forKey: "logExpanded")   // collapsed the first time, then as last left
+        if let scene = App.scene { stageScene(scene); return }   // no timer, no rescue of frozen workers, no network
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
         rescueFrozen()
         installSignalHandlers()
@@ -1433,31 +1454,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         if let i = CommandLine.arguments.firstIndex(of: "--debug-panel"), i + 1 < CommandLine.arguments.count {
             // renders the whole panel at popover width, off screen, into a PNG (2x), then quits
             let out = URL(fileURLWithPath: CommandLine.arguments[i + 1])
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                self.layoutPanel()
-                let view = self.panelController.view
-                let size = view.fittingSize
-                let host = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: true)
-                host.appearance = NSApp.appearance
-                self.popover.contentViewController = nil
-                host.contentView = view
-                view.layoutSubtreeIfNeeded()
-                let draw = { () -> NSBitmapImageRep in
-                    let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)!
-                    view.cacheDisplay(in: view.bounds, to: rep); return rep
-                }
-                _ = draw(); view.layoutSubtreeIfNeeded()
-                let rep = draw()
-                let dark = (NSApp.appearance ?? view.effectiveAppearance).bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-                let image = NSImage(size: view.bounds.size)
-                image.lockFocus()
-                NSColor(white: dark ? 0.17 : 0.93, alpha: 1).setFill(); view.bounds.fill()
-                rep.draw(in: view.bounds, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
-                image.unlockFocus()
-                if let tiff = image.tiffRepresentation { try? NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])?.write(to: out) }
-                print("Wrote \(out.path) \(size)"); fflush(stdout)
-                NSApp.terminate(nil)
-            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { self.renderPanel(to: out) }
         }
         if debugLogAnimation {   // toggles the log twice (back to how it was), printing each frame, then quits
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.showPanel() }
@@ -1495,6 +1492,113 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let b = NSBox(); b.boxType = .separator
         b.translatesAutoresizingMaskIntoConstraints = false
         return b
+    }
+
+    /// Renders the whole panel off screen into an sRGB PNG, on the panel colour, then quits.
+    /// 2x by default; `--width <px>` draws it straight at that pixel width, so a page that shows
+    /// the panel at that size never has to resample it (resampling blurs the text).
+    func renderPanel(to out: URL) {
+        layoutPanel()
+        let view = panelController.view
+        let size = view.fittingSize
+        let host = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: true)
+        host.appearance = NSApp.appearance
+        popover.contentViewController = nil
+        host.contentView = view
+        view.layoutSubtreeIfNeeded()
+        var scale: CGFloat = 2
+        if let i = CommandLine.arguments.firstIndex(of: "--width"), i + 1 < CommandLine.arguments.count,
+           let w = Double(CommandLine.arguments[i + 1]), w > 0 { scale = CGFloat(w) / size.width }
+        let pw = Int((size.width * scale).rounded()), ph = Int((size.height * scale).rounded())
+        let draw = { () -> NSBitmapImageRep in
+            let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: pw, pixelsHigh: ph, bitsPerSample: 8, samplesPerPixel: 4,
+                                       hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+            rep.size = view.bounds.size
+            view.cacheDisplay(in: view.bounds, to: rep); return rep
+        }
+        _ = draw(); view.layoutSubtreeIfNeeded()
+        let rep = draw()
+        let dark = (NSApp.appearance ?? view.effectiveAppearance).bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        // flatten onto the panel colour in an sRGB bitmap: the colours a browser shows without converting
+        let srgb = CGColorSpace(name: CGColorSpace.sRGB)!
+        guard let cg = CGContext(data: nil, width: pw, height: ph, bitsPerComponent: 8, bytesPerRow: 0, space: srgb,
+                                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { NSApp.terminate(nil); return }
+        cg.interpolationQuality = .none
+        cg.setFillColor(NSColor(white: dark ? 0.17 : 0.93, alpha: 1).usingColorSpace(.sRGB)!.cgColor)
+        cg.fill(CGRect(x: 0, y: 0, width: pw, height: ph))
+        if let image = rep.cgImage { cg.draw(image, in: CGRect(x: 0, y: 0, width: pw, height: ph)) }
+        if let image = cg.makeImage(), let dest = CGImageDestinationCreateWithURL(out as CFURL, "public.png" as CFString, 1, nil) {
+            CGImageDestinationAddImage(dest, image, nil); CGImageDestinationFinalize(dest)
+        }
+        print("Wrote \(out.path) \(size) at \(pw)×\(ph) px"); fflush(stdout)
+        NSApp.terminate(nil)
+    }
+
+    /// `--debug-scene`: stages a 30/5 cycle at a fixed time with two hours of realistic history,
+    /// renders the panel and quits. "working" and "compact" are at 17:40, 18 of 30 work minutes in;
+    /// "resting" is the detached window at 17:45, two minutes into a five-minute rest.
+    func stageScene(_ name: String) {
+        guard let i = CommandLine.arguments.firstIndex(of: "--debug-scene") else { return }
+        let out = URL(fileURLWithPath: CommandLine.arguments[i + 2])
+        refresh()   // the stopped state first, as at launch: starting the cycle then reveals the chart
+        let resting = name == "resting"
+        func at(_ h: Int, _ m: Int) -> Date { Calendar.current.date(bySettingHour: h, minute: m, second: 0, of: Date())! }
+        let now = resting ? at(17, 45) : at(17, 40)
+        // the cycle started before the history window, which opens inside a work interval; a rest every 35 minutes
+        let start = resting ? at(14, 53) : at(15, 2)
+        let rests = (0..<8).map { k -> (Date, Date) in
+            let s = start.addingTimeInterval(Double(k) * 35 * 60 + 30 * 60); return (s, s.addingTimeInterval(5 * 60))
+        }.filter { $0.0 < now }
+        let samples = App.sceneSamples(from: now.addingTimeInterval(-120 * 60), to: now,
+                                       rests: rests.map { ($0.0.timeIntervalSinceReferenceDate, $0.1.timeIntervalSinceReferenceDate) })
+        chart.samples = samples
+        func cpu(at d: Date) -> Int { Int((samples.last { $0.t <= d.timeIntervalSinceReferenceDate }?.cpu ?? 85).rounded()) }
+        var events: [(Date, String)] = [(start, "Cycle started · 30 min work, 5 min rest"), (start, "\(target.name) is encoding")]
+        for (s, e) in rests {
+            events.append((s, "\(target.name) paused · CPU \(cpu(at: s.addingTimeInterval(-10)))%"))
+            if e <= now { events.append((e, "\(target.name) resumed")) }
+        }
+        for (d, text) in events { sceneClock = d; log(text) }
+        sceneClock = now
+        if resting {
+            phase = .resting; restStart = rests.last!.0; restEnd = rests.last!.1
+        } else {
+            phase = .working; isEncoding = true; workSeconds = 18 * 60; pausePlanned = at(17, 52)
+        }
+        refresh()
+        layoutPanel()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self.renderPanel(to: out) }
+    }
+
+    /// Readings shaped like a real HandBrake encode on an M4 Pro: CPU near 86% of the Mac with a little
+    /// wander while working, near zero at rest; the hottest core jumps to the high 70s within seconds and
+    /// then creeps towards 100 °C, and during a rest drops fast, then slowly. One sample every 5 s, as the app records.
+    static func sceneSamples(from t0: Date, to t1: Date, rests: [(TimeInterval, TimeInterval)]) -> [Sample] {
+        var seed: UInt64 = 0x5135_7a
+        func noise() -> Double {   // deterministic, -1...1
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return Double(seed >> 11) / Double(1 << 53) * 2 - 1
+        }
+        let a = t0.timeIntervalSinceReferenceDate, b = t1.timeIntervalSinceReferenceDate
+        var fast = 28.0, slow = 27.0, load = 86.0, wander = 0.0, out: [Sample] = []
+        var sumCpu = 0.0, n = 0
+        var t = a - 40 * 60   // warm up first, so the history opens on settled readings
+        while t <= b + 0.5 {
+            let resting = rests.contains { t >= $0.0 && t < $0.1 }
+            wander = wander * 0.985 + noise() * 0.35
+            let target = resting ? 0.3 : 86 + 2.2 * sin(t / 53) + 1.3 * sin(t / 17) + wander
+            load += (target - load) * (resting ? 0.6 : 0.45)
+            fast += ((resting ? 0 : 28) - fast) / 15
+            slow += ((resting ? 0 : 27) - slow) / 300
+            sumCpu += max(0, load); n += 1
+            if t >= a && Int(t - a) % 5 == 0 {
+                let temp = 45 + fast + slow + noise() * 0.45 + (resting ? 0 : 0.6 * sin(t / 41))
+                out.append(Sample(t: t, cpu: sumCpu / Double(n), temp: temp, resting: resting))
+                sumCpu = 0; n = 0
+            } else if t < a { sumCpu = 0; n = 0 }
+            t += 1
+        }
+        return out
     }
 
     func buildPanel() {
@@ -2221,7 +2325,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let para = NSMutableParagraphStyle()
         para.tabStops = [NSTextTab(textAlignment: .left, location: 46)]
         para.headIndent = 46; para.paragraphSpacing = 4
-        let line = NSMutableAttributedString(string: "\(f.string(from: Date()))\t\(s)\n", attributes: [
+        let line = NSMutableAttributedString(string: "\(f.string(from: clockNow()))\t\(s)\n", attributes: [
             .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular),
             .foregroundColor: NSColor.labelColor, .paragraphStyle: para])
         line.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: NSRange(location: 0, length: 5))
@@ -2270,12 +2374,12 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             let elapsed = min(workSeconds, total)
             let left = Int(ceil((total - elapsed) / 60))
             // the bar runs until the planned pause, which comes early in the first cycle
-            let untilPause = max(0, (pausePlanned ?? Date().addingTimeInterval(total - elapsed)).timeIntervalSinceNow)
+            let untilPause = max(0, (pausePlanned ?? clockNow().addingTimeInterval(total - elapsed)).timeIntervalSince(clockNow()))
             progress.value = isEncoding ? elapsed / max(1, elapsed + untilPause) : progress.value
             progressLabel.stringValue = "Work interval"
             progressDetail.stringValue = "\(Int(elapsed / 60)) of \(Int(workMinutes)) min elapsed"
             if isEncoding {
-                let eta = f.string(from: pausePlanned ?? Date().addingTimeInterval(total - elapsed))
+                let eta = f.string(from: pausePlanned ?? clockNow().addingTimeInterval(total - elapsed))
                 setStatus(state: "working", description: "Working", title: "\(target.name) is working",
                           subtitle: "Next pause at \(eta)", count: "\(left)m",
                           tooltip: "\(target.name) is working, pause in \(left) min", barTitle: "\(left)m")
@@ -2287,7 +2391,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             runButton.title = "Stop cycle"
         case .resting:
             let total = max(1, restEnd.timeIntervalSince(restStart))
-            let elapsed = min(Date().timeIntervalSince(restStart), total)
+            let elapsed = min(clockNow().timeIntervalSince(restStart), total)
             let left = Int(ceil((total - elapsed) / 60))
             progress.value = elapsed / total
             progressLabel.stringValue = "Rest interval"

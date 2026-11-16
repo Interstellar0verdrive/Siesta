@@ -13,9 +13,9 @@ Siesta counts the minutes the encoder has **actually** been working, then pauses
 **HandBrake** is the first supported app. The code is structured so other encoders (Tdarr, Topaz Video AI, plain ffmpeg…) can be added as profiles.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="Resources/siesta-hero-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="Resources/siesta-hero-light.png">
-  <img src="Resources/siesta-hero-dark.png" alt="Siesta in the macOS menu bar: HandBrake is working, with 12 minutes until the next pause, 18 of 30 work minutes elapsed, and recent CPU and temperature history">
+  <source media="(prefers-color-scheme: dark)" srcset="Resources/siesta-hero-dark.webp">
+  <source media="(prefers-color-scheme: light)" srcset="Resources/siesta-hero-light.webp">
+  <img src="Resources/siesta-hero-dark.webp" alt="Siesta in the macOS menu bar: HandBrake is working, with 12 minutes until the next pause, 18 of 30 work minutes elapsed, and recent CPU and temperature history">
 </picture>
 
 <br>
@@ -50,8 +50,8 @@ Clicking the menu bar icon opens a popover with the current state and a countdow
 
 You can change Work and Rest while the cycle runs: the new value applies as soon as you confirm it with Return, Tab or a click elsewhere, and the change appears in the activity log. In the two fields, the ↑ and ↓ keys step the value by one minute, by ten with Shift. **Stop cycle** stops Siesta's cycle, never the encoder.
 
-<a href="Resources/siesta-interface-compact.png">
-  <img src="Resources/siesta-interface-compact.png" alt="Compact Siesta popover in light and dark mode, with the graph collapsed to live CPU and temperature readings">
+<a href="Resources/siesta-interface-compact.webp">
+  <img src="Resources/siesta-interface-compact.webp" alt="Compact Siesta popover in light and dark mode, with the graph collapsed to live CPU and temperature readings">
 </a>
 
 <br>
@@ -65,8 +65,8 @@ The chart starts with a five-minute view, grows with the session, and then keeps
 
 Collapse the chart with the chevron next to its title and the header keeps showing the current CPU and temperature readings, as in the compact view above, just the current readings. Siesta remembers whether you left the chart and the log open or closed.
 
-<a href="Resources/siesta-interface-expanded.png">
-  <img src="Resources/siesta-interface-expanded.png" alt="Siesta popover in light and dark mode, with a 30-minute work interval, 12 minutes until the next rest, and the graph expanded to show CPU, temperature and shaded rest periods">
+<a href="Resources/siesta-interface-expanded.webp">
+  <img src="Resources/siesta-interface-expanded.webp" alt="Siesta popover in light and dark mode, with a 30-minute work interval, 12 minutes until the next rest, and the graph expanded to show CPU, temperature and shaded rest periods">
 </a>
 
 <br>
@@ -76,8 +76,8 @@ Collapse the chart with the chevron next to its title and the header keeps showi
 
 Turn on **Detached window** to keep Siesta open as a regular window that floats above your other apps, handy when you want to keep an eye on a long queue without reopening the popover. It holds exactly the same panel, with a little more room for the activity log. Here the chart is collapsed and **Activity log** is expanded, showing recent pauses and resumes. Uncheck Detached window to return to the menu bar popover.
 
-<a href="Resources/siesta-interface-detached.png">
-  <img src="Resources/siesta-interface-detached.png" alt="Detached Siesta window in light and dark mode during a five-minute rest, with current CPU and temperature readings and the expanded activity log">
+<a href="Resources/siesta-interface-detached.webp">
+  <img src="Resources/siesta-interface-detached.webp" alt="Detached Siesta window in light and dark mode during a five-minute rest, with current CPU and temperature readings and the expanded activity log">
 </a>
 
 <br>
