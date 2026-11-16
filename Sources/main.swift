@@ -601,7 +601,10 @@ final class ChartView: NSView, HandCursorView {
             return a
         }
         let a = NSMutableAttributedString(string: "■ Rest    ", attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
-        a.addAttribute(.foregroundColor, value: NSColor.labelColor.withAlphaComponent(0.18), range: NSRange(location: 0, length: 1))
+        // a translucent grey glyph vanishes in light mode inside the live text field (popover and window
+        // alike, not in offscreen renders): a solid grey there, the translucent one on the dark panel
+        let swatch = isDark ? NSColor.labelColor.withAlphaComponent(0.18) : NSColor(white: 0.74, alpha: 1)
+        a.addAttribute(.foregroundColor, value: swatch, range: NSRange(location: 0, length: 1))
         let (s0, e0) = range
         a.append(NSAttributedString(string: ChartView.spanLabel(e0 - s0), attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor]))
         return a
@@ -816,6 +819,16 @@ final class SolidImageView: NSImageView {
 
 /// Panel background: a click on empty space drops focus from a text field and commits its value.
 final class BackgroundView: NSView {
+    /// Light mode only: over a dark window the popover's translucency turns mid grey and the coloured
+    /// text (temperature, CPU, update chip) loses its contrast. A near-opaque fill in the window colour
+    /// makes the popover read like the detached window; dark mode keeps the plain translucency.
+    static let lightFill: CGFloat = 0.88
+    override func draw(_ dirtyRect: NSRect) {
+        guard effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .aqua else { return }
+        NSColor.windowBackgroundColor.withAlphaComponent(BackgroundView.lightFill).setFill()
+        dirtyRect.fill()
+    }
+    override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); needsDisplay = true }
     override func mouseDown(with event: NSEvent) { window?.makeFirstResponder(nil) }
 }
 
@@ -902,9 +915,9 @@ final class LogBoxView: NSView {
         count.alignment = .right
         clear.isBordered = false
         clear.font = .systemFont(ofSize: 11)
-        clear.attributedTitle = NSAttributedString(string: "Clear", attributes: [
-            .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.labelColor,
-            .underlineStyle: NSUnderlineStyle.single.rawValue])
+        clear.text = "Clear"
+        // grey like the event count beside it, almost black (white on the dark panel) under the pointer
+        clear.hoverColor = NSColor(name: nil) { $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .white : NSColor(white: 0.08, alpha: 1) }
         clear.target = self; clear.action = #selector(clearTapped)
         clear.setAccessibilityLabel("Clear activity log")
         dot.font = .systemFont(ofSize: 11); dot.textColor = .secondaryLabelColor
@@ -1115,9 +1128,27 @@ final class HandCursorTracker: NSResponder {
     }
 }
 
+/// Small underlined text link: secondary colour at rest, full label colour under the pointer, hand cursor.
 final class LinkButton: NSButton, HandCursorView {
+    var text = "" { didSet { restyle() } }
+    var hoverColor: NSColor = .labelColor { didSet { restyle() } }
+    private var hovered = false { didSet { restyle() } }
+    private func restyle() {
+        attributedTitle = NSAttributedString(string: text, attributes: [
+            .font: NSFont.systemFont(ofSize: 11),
+            .foregroundColor: hovered && isEnabled ? hoverColor : NSColor.secondaryLabelColor,
+            .underlineStyle: NSUnderlineStyle.single.rawValue])
+    }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil))
+    }
+    override func mouseEntered(with event: NSEvent) { hovered = true }
+    override func mouseExited(with event: NSEvent) { hovered = false }
+    override func viewDidHide() { super.viewDidHide(); hovered = false }
     override func resetCursorRects() { if isEnabled { addCursorRect(bounds, cursor: .pointingHand) } }
-    func wantsHandCursor(at point: NSPoint) -> Bool { isEnabled }
+    func wantsHandCursor(at point: NSPoint) -> Bool { isEnabled && !isHidden }
 }
 
 /// Small symbol button: secondary colour at rest, full label colour under the pointer, hand cursor.
