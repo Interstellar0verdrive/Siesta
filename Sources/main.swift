@@ -1,5 +1,6 @@
 import AppKit
 import CryptoKit
+import ServiceManagement
 
 // Siesta — a menu bar utility that gives a long-running encoder periodic rests.
 // It counts minutes of real work, freezes the worker processes (SIGSTOP) for a
@@ -364,6 +365,9 @@ final class ChartView: NSView, HandCursorView {
         return p
     }
 
+    /// Longer than this between two samples (one every 5 s) is a gap, not a slope.
+    static let gapSeconds: TimeInterval = 30
+
     /// Magnetic rest bands: near the edge of a rest band the hover line sticks to the change.
     var magneticBands = true
     static let magnetPixels: Double = 6
@@ -675,22 +679,31 @@ final class ChartView: NSView, HandCursorView {
         // buckets are anchored in time, not on the screen, so they hold still while the view scrolls; a bucket
         // never spans a change between work and rest, so even a short rest keeps its dip when zoomed far out
         let bucketSeconds = bucketPx * w / Double(plotW)
+        // a gap in the data (the chart held still while idle, the Mac asleep) breaks the line: nothing is drawn across it
         func path(_ value: (Sample) -> Double?, lane: NSRect, maxV: Double, minV: Double) -> NSBezierPath {
-            var points: [NSPoint] = []
+            var runs: [[NSPoint]] = [[]]
             var bucket = Int.min, resting = false, accV = 0.0, accX = 0.0, n = 0
+            var lastT: TimeInterval?
             func flush() {
                 guard n > 0 else { return }
                 let py = lane.minY + CGFloat((accV / Double(n) - minV) / max(1, maxV - minV)) * lane.height
-                points.append(NSPoint(x: CGFloat(accX / Double(n)), y: min(lane.maxY, max(lane.minY, py))))
+                runs[runs.count - 1].append(NSPoint(x: CGFloat(accX / Double(n)), y: min(lane.maxY, max(lane.minY, py))))
             }
             for smp in visible {
                 guard let v = value(smp) else { continue }
                 let k = Int(floor(smp.t / bucketSeconds))
-                if k != bucket || smp.resting != resting { flush(); bucket = k; resting = smp.resting; accV = 0; accX = 0; n = 0 }
+                let gap = lastT.map { smp.t - $0 > ChartView.gapSeconds } ?? false
+                if k != bucket || smp.resting != resting || gap {
+                    flush(); bucket = k; resting = smp.resting; accV = 0; accX = 0; n = 0
+                    if gap { runs.append([]) }
+                }
                 accV += v; accX += Double(x(smp.t)); n += 1
+                lastT = smp.t
             }
             flush()
-            return smooth ? ChartView.monotoneCurve(points) : ChartView.polyline(points)
+            let out = NSBezierPath(); out.lineWidth = 1.5; out.lineJoinStyle = .round
+            for run in runs where !run.isEmpty { out.append(smooth ? ChartView.monotoneCurve(run) : ChartView.polyline(run)) }
+            return out
         }
         cpuColor.setStroke()
         path({ $0.cpu }, lane: cpuLane, maxV: cpuMax, minV: 0).stroke()
@@ -1260,6 +1273,8 @@ final class UpdateChip: NSView, HandCursorView {
 final class FlatButton: NSButton, HandCursorView {
     let primary: Bool
     var hoverFill: NSColor?          // e.g. red for a destructive action
+    /// Smaller secondary button for a row of the settings page: 24 pt tall, 6 pt corners.
+    var compact = false { didSet { layer?.cornerRadius = compact ? 6 : 8; invalidateIntrinsicContentSize() } }
     init(title: String, primary: Bool) {
         self.primary = primary
         super.init(frame: .zero)
@@ -1282,6 +1297,7 @@ final class FlatButton: NSButton, HandCursorView {
     override var title: String { didSet { if wantsLayer { updateTitleColor() } } }
     override var intrinsicContentSize: NSSize {
         let s = super.intrinsicContentSize
+        if compact { return NSSize(width: s.width + 18, height: 24) }
         return NSSize(width: s.width + (primary ? 28 : 24), height: primary ? 34 : 30)
     }
     private var hovered = false { didSet { updateTitleColor(); needsDisplay = true } }
@@ -1316,8 +1332,315 @@ final class FlatButton: NSButton, HandCursorView {
     override var acceptsFirstResponder: Bool { true }
     override var canBecomeKeyView: Bool { true }
     override var focusRingMaskBounds: NSRect { bounds }
-    override func drawFocusRingMask() { NSBezierPath(roundedRect: bounds, xRadius: 8, yRadius: 8).fill() }
+    override func drawFocusRingMask() { NSBezierPath(roundedRect: bounds, xRadius: compact ? 6 : 8, yRadius: compact ? 6 : 8).fill() }
 }
+
+// MARK: - Settings page controls
+// Drawn in the panel's own style: labelColor 6 % fills, 16 % borders, the accent when on.
+
+/// On/off switch, 30 × 18 pt: bordered grey track when off, accent when on; the knob glides over 0.15 s.
+final class ToggleSwitch: NSView, HandCursorView {
+    private(set) var isOn = false
+    var onToggle: ((Bool) -> Void)?
+    private var knob: CGFloat = 0 { didSet { needsDisplay = true } }   // 0 off … 1 on
+    private var hovered = false { didSet { needsDisplay = true } }
+    private var anim: Timer?
+    init(label: String) {
+        super.init(frame: .zero)
+        setAccessibilityElement(true); setAccessibilityRole(.checkBox); setAccessibilityLabel(label)
+        setContentHuggingPriority(.required, for: .horizontal)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override var intrinsicContentSize: NSSize { NSSize(width: 30, height: 18) }
+    override var allowsVibrancy: Bool { false }
+    func setOn(_ on: Bool, animated: Bool) {
+        isOn = on
+        setAccessibilityValue(on)
+        anim?.invalidate()
+        guard animated else { knob = on ? 1 : 0; return }
+        let from = knob, to: CGFloat = on ? 1 : 0, start = Date()
+        anim = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] t in
+            let p = min(1, Date().timeIntervalSince(start) / 0.15)
+            let e = p < 0.5 ? 2 * p * p : 1 - pow(-2 * p + 2, 2) / 2
+            self?.knob = from + (to - from) * CGFloat(e)
+            if p >= 1 { t.invalidate() }
+        }
+    }
+    override func mouseDown(with event: NSEvent) { setOn(!isOn, animated: true); onToggle?(isOn) }
+    override func accessibilityPerformPress() -> Bool { setOn(!isOn, animated: true); onToggle?(isOn); return true }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil))
+    }
+    override func mouseEntered(with event: NSEvent) { hovered = true }
+    override func mouseExited(with event: NSEvent) { hovered = false }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+    func wantsHandCursor(at point: NSPoint) -> Bool { true }
+    override func draw(_ dirtyRect: NSRect) {
+        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let r = NSRect(x: 0, y: (bounds.height - 18) / 2, width: 30, height: 18)
+        let offFill = NSColor.labelColor.withAlphaComponent(hovered ? 0.11 : 0.06).usingColorSpace(.sRGB)!
+        let accent = (hovered ? NSColor.controlAccentColor.blended(withFraction: 0.10, of: .white) ?? .controlAccentColor : .controlAccentColor).usingColorSpace(.sRGB)!
+        // the off fill is translucent: draw it, then the accent over it at the knob's progress
+        offFill.setFill(); NSBezierPath(roundedRect: r, xRadius: 9, yRadius: 9).fill()
+        accent.withAlphaComponent(knob).setFill(); NSBezierPath(roundedRect: r, xRadius: 9, yRadius: 9).fill()
+        if knob < 1 {
+            NSColor.labelColor.withAlphaComponent(0.16 * (1 - knob)).setStroke()
+            let border = NSBezierPath(roundedRect: r.insetBy(dx: 0.5, dy: 0.5), xRadius: 8.5, yRadius: 8.5); border.lineWidth = 1; border.stroke()
+        }
+        NSGraphicsContext.saveGraphicsState()
+        let shadow = NSShadow(); shadow.shadowOffset = NSSize(width: 0, height: -0.5); shadow.shadowBlurRadius = 1.5
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.35); shadow.set()
+        // the knob: white when on and in light mode, a light grey while off on the dark panel
+        let offKnob = dark ? NSColor(white: 0.81, alpha: 1) : .white
+        (offKnob.blended(withFraction: knob, of: .white) ?? .white).setFill()
+        NSBezierPath(ovalIn: NSRect(x: r.minX + 2 + 12 * knob, y: r.minY + 2, width: 14, height: 14)).fill()
+        NSGraphicsContext.restoreGraphicsState()
+    }
+}
+
+/// Segmented choice (System / Light / Dark): a bordered track with the chosen segment raised.
+final class SegmentedPicker: NSView, HandCursorView {
+    let items: [String]
+    private(set) var selected = 0
+    var onChange: ((Int) -> Void)?
+    private var hovered: Int? { didSet { if hovered != oldValue { needsDisplay = true } } }
+    private let font = NSFont.systemFont(ofSize: 12), boldFont = NSFont.systemFont(ofSize: 12, weight: .medium)
+    init(items: [String], label: String) {
+        self.items = items
+        super.init(frame: .zero)
+        setAccessibilityElement(true); setAccessibilityRole(.radioGroup); setAccessibilityLabel(label)
+        setContentHuggingPriority(.required, for: .horizontal)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override var allowsVibrancy: Bool { false }
+    /// Each segment fits its widest weight, so the text never shifts when it becomes the chosen one.
+    private var widths: [CGFloat] { items.map { ceil(NSAttributedString(string: $0, attributes: [.font: boldFont]).size().width) + 18 } }
+    override var intrinsicContentSize: NSSize { NSSize(width: widths.reduce(0, +) + CGFloat(items.count - 1) + 2 * 2, height: 22) }
+    private func segmentRects() -> [NSRect] {
+        var x: CGFloat = 2, out: [NSRect] = []
+        for w in widths { out.append(NSRect(x: x, y: 2, width: w, height: bounds.height - 4)); x += w + 1 }
+        return out
+    }
+    func select(_ i: Int) { selected = i; needsDisplay = true }
+    override func mouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        guard let i = segmentRects().firstIndex(where: { $0.contains(p) }), i != selected else { return }
+        selected = i; needsDisplay = true; onChange?(i)
+    }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil))
+    }
+    override func mouseMoved(with event: NSEvent) { let p = convert(event.locationInWindow, from: nil); hovered = segmentRects().firstIndex { $0.contains(p) } }
+    override func mouseExited(with event: NSEvent) { hovered = nil }
+    func wantsHandCursor(at point: NSPoint) -> Bool { segmentRects().firstIndex { $0.contains(point) }.map { $0 != selected } ?? false }
+    override func draw(_ dirtyRect: NSRect) {
+        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let track = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 5.5, yRadius: 5.5)
+        NSColor.labelColor.withAlphaComponent(0.06).setFill(); track.fill()
+        NSColor.labelColor.withAlphaComponent(0.16).setStroke(); track.lineWidth = 1; track.stroke()
+        for (i, r) in segmentRects().enumerated() {
+            let seg = NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4)
+            if i == selected {
+                NSGraphicsContext.saveGraphicsState()
+                let shadow = NSShadow(); shadow.shadowOffset = NSSize(width: 0, height: -0.5); shadow.shadowBlurRadius = 1.5
+                shadow.shadowColor = NSColor.black.withAlphaComponent(dark ? 0.3 : 0.18); shadow.set()
+                (dark ? NSColor.white.withAlphaComponent(0.17) : .white).setFill(); seg.fill()
+                NSGraphicsContext.restoreGraphicsState()
+            } else if i == hovered {
+                NSColor.labelColor.withAlphaComponent(0.05).setFill(); seg.fill()
+            }
+            let text = NSAttributedString(string: items[i], attributes: [.font: i == selected ? boldFont : font, .foregroundColor: NSColor.labelColor])
+            let size = text.size()
+            text.draw(at: NSPoint(x: r.midX - size.width / 2, y: r.midY - size.height / 2))
+        }
+    }
+}
+
+/// Pill that switches one item on or off (what the menu bar shows): accent with white text when on.
+final class ChipToggle: NSView, HandCursorView {
+    let label = NSTextField(labelWithString: "")
+    private(set) var isOn = false
+    var onToggle: ((Bool) -> Void)?
+    private var hovered = false { didSet { needsDisplay = true } }
+    init(title: String) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 11
+        layer?.borderWidth = 1
+        label.stringValue = title
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 9), label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -9),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor), heightAnchor.constraint(equalToConstant: 22),
+        ])
+        setAccessibilityElement(true); setAccessibilityRole(.checkBox); setAccessibilityLabel(title)
+        restyle()
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override var allowsVibrancy: Bool { false }
+    func setOn(_ on: Bool) { isOn = on; setAccessibilityValue(on); restyle() }
+    private func restyle() {
+        label.font = .systemFont(ofSize: 12, weight: isOn ? .medium : .regular)
+        label.textColor = isOn ? .white : .labelColor
+        needsDisplay = true
+    }
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {
+        let fill: NSColor = isOn ? (hovered ? NSColor.controlAccentColor.blended(withFraction: 0.10, of: .white) ?? .controlAccentColor : .controlAccentColor)
+                                 : NSColor.labelColor.withAlphaComponent(hovered ? 0.11 : 0.06)
+        easeLayerColor(layer, "backgroundColor", to: fill.cgColor)
+        easeLayerColor(layer, "borderColor", to: isOn ? NSColor.clear.cgColor : NSColor.labelColor.withAlphaComponent(0.16).cgColor)
+    }
+    override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); needsDisplay = true }
+    override func mouseDown(with event: NSEvent) { setOn(!isOn); onToggle?(isOn) }
+    override func accessibilityPerformPress() -> Bool { setOn(!isOn); onToggle?(isOn); return true }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil))
+    }
+    override func mouseEntered(with event: NSEvent) { hovered = true }
+    override func mouseExited(with event: NSEvent) { hovered = false }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+    func wantsHandCursor(at point: NSPoint) -> Bool { true }
+}
+
+/// One-point line between the rows of a settings group.
+final class HairlineView: NSView {
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        translatesAutoresizingMaskIntoConstraints = false
+        heightAnchor.constraint(equalToConstant: 1).isActive = true
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() { layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.09).cgColor }
+}
+
+/// A settings group: a small title above a bordered box (the style of the activity log) holding rows.
+final class SettingsGroup: NSView {
+    let box = NSView()
+    init(title: String, rows: [NSView]) {
+        super.init(frame: .zero)
+        let caption = NSTextField(labelWithString: title)
+        caption.font = .systemFont(ofSize: 11, weight: .semibold)
+        caption.textColor = .secondaryLabelColor
+        box.wantsLayer = true
+        box.layer?.cornerRadius = 8
+        box.layer?.borderWidth = 1
+        var views: [NSView] = []
+        for (i, row) in rows.enumerated() { if i > 0 { views.append(HairlineView()) }; views.append(row) }
+        let list = NSStackView(views: views)
+        list.orientation = .vertical; list.alignment = .width; list.spacing = 0
+        list.translatesAutoresizingMaskIntoConstraints = false
+        box.addSubview(list)
+        let column = NSStackView(views: [caption, box])
+        column.orientation = .vertical; column.alignment = .leading; column.spacing = 6
+        column.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(column)
+        box.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            list.leadingAnchor.constraint(equalTo: box.leadingAnchor), list.trailingAnchor.constraint(equalTo: box.trailingAnchor),
+            list.topAnchor.constraint(equalTo: box.topAnchor), list.bottomAnchor.constraint(equalTo: box.bottomAnchor),
+            column.leadingAnchor.constraint(equalTo: leadingAnchor), column.trailingAnchor.constraint(equalTo: trailingAnchor),
+            column.topAnchor.constraint(equalTo: topAnchor), column.bottomAnchor.constraint(equalTo: bottomAnchor),
+            box.widthAnchor.constraint(equalTo: column.widthAnchor),
+            caption.leadingAnchor.constraint(equalTo: column.leadingAnchor, constant: 12),
+        ])
+        for row in rows { row.widthAnchor.constraint(equalTo: list.widthAnchor).isActive = true }
+        updateBox()
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    private func updateBox() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            box.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.06).cgColor
+            box.layer?.borderColor = NSColor.labelColor.withAlphaComponent(0.16).cgColor
+        }
+    }
+    override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); updateBox() }
+}
+
+/// A settings row: title (and an optional grey line under it) on the left, the control on the right.
+/// 34 pt tall, 44 pt with the second line.
+final class SettingsRow: NSView {
+    let title = NSTextField(labelWithString: "")
+    let detail = NSTextField(labelWithString: "")
+    let detailLine: NSStackView
+    init(_ text: String, detail: String? = nil, link: LinkButton? = nil, control: NSView) {
+        detailLine = NSStackView()
+        super.init(frame: .zero)
+        title.stringValue = text
+        title.font = .systemFont(ofSize: 13)
+        self.detail.font = .systemFont(ofSize: 11)
+        self.detail.textColor = .secondaryLabelColor
+        self.detail.stringValue = detail ?? ""
+        detailLine.setViews([self.detail] + (link.map { [$0] } ?? []), in: .leading)
+        detailLine.orientation = .horizontal; detailLine.spacing = 0; detailLine.alignment = .firstBaseline
+        let texts = NSStackView(views: [title, detailLine])
+        texts.orientation = .vertical; texts.alignment = .leading; texts.spacing = 1
+        detailLine.isHidden = detail == nil && link == nil
+        let row = NSStackView(views: [texts, NSView(), control])
+        row.orientation = .horizontal; row.alignment = .centerY; row.spacing = 10
+        row.setCustomSpacing(0, after: texts)   // the spacer between texts and control adds no gap of its own
+        row.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
+        row.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(row)
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: leadingAnchor), row.trailingAnchor.constraint(equalTo: trailingAnchor),
+            row.topAnchor.constraint(equalTo: topAnchor), row.bottomAnchor.constraint(equalTo: bottomAnchor),
+            heightAnchor.constraint(equalToConstant: detailLine.isHidden ? 34 : 44),
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError() }
+}
+
+/// The back button of the settings page: a chevron in a square that lights up under the pointer.
+final class BackButton: NSView, HandCursorView {
+    let chevron = NSImageView()
+    var onClick: (() -> Void)?
+    private var hovered = false { didSet { chevron.contentTintColor = hovered ? .labelColor : .secondaryLabelColor; needsDisplay = true } }
+    init() {
+        super.init(frame: .zero)
+        chevron.image = NSImage(systemSymbolName: "chevron.left", accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold))
+        chevron.contentTintColor = .secondaryLabelColor
+        chevron.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(chevron)
+        NSLayoutConstraint.activate([
+            chevron.centerXAnchor.constraint(equalTo: centerXAnchor), chevron.centerYAnchor.constraint(equalTo: centerYAnchor),
+            widthAnchor.constraint(equalToConstant: 28), heightAnchor.constraint(equalToConstant: 28),
+        ])
+        setAccessibilityElement(true); setAccessibilityRole(.button); setAccessibilityLabel("Back")
+        toolTip = "Back (Esc)"
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func mouseDown(with event: NSEvent) { onClick?() }
+    override func accessibilityPerformPress() -> Bool { onClick?(); return true }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil))
+    }
+    override func mouseEntered(with event: NSEvent) { hovered = true }
+    override func mouseExited(with event: NSEvent) { hovered = false }
+    override func viewDidHide() { super.viewDidHide(); hovered = false }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+    func wantsHandCursor(at point: NSPoint) -> Bool { true }
+    /// `--debug-scene settings` shows the pointer on it, as on the board.
+    func showHover() { hovered = true }
+    override func draw(_ dirtyRect: NSRect) {
+        guard hovered else { return }
+        NSColor.labelColor.withAlphaComponent(0.06).setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: 7, yRadius: 7).fill()
+    }
+}
+
 
 final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     // MARK: UI
@@ -1346,7 +1669,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     let detachCheckbox = StyledCheckbox(title: "Detached window")
     let logBox = LogBoxView()
     let versionLabel = NSTextField(labelWithString: "")
-    let aboutButton = HoverIconButton(symbol: "questionmark.circle", pointSize: 13, label: "About Siesta", weight: .regular)
+    let settingsButton = HoverIconButton(symbol: "gearshape", pointSize: 14, label: "Settings", weight: .regular)
     let updateChip = UpdateChip()
     var updateRow: NSView!
     var panelColumn: NSStackView!
@@ -1358,6 +1681,36 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     var announcedThisRun = ""
     var quitting = false
     var logView: NSTextView { logBox.list }
+    // settings page
+    var mainColumn: NSStackView!
+    var settingsColumn: NSStackView!
+    var showingSettings = false
+    var pageTransition: Timer?
+    let backButton = BackButton()
+    let loginSwitch = ToggleSwitch(label: "Open at login")
+    let appearancePicker = SegmentedPicker(items: ["System", "Light", "Dark"], label: "Appearance")
+    let menuBarChips = [("time", ChipToggle(title: "Time")), ("cpu", ChipToggle(title: "CPU")), ("temp", ChipToggle(title: "Temp"))]
+    var menuBarRow: SettingsRow!
+    let autoStartSwitch = ToggleSwitch(label: "Start automatically")
+    let logFileSwitch = ToggleSwitch(label: "Save the activity log to a file")
+    var logFileRow: SettingsRow!
+    let showLogLink = LinkButton(title: "", target: nil, action: nil)
+    let smoothSwitch = ToggleSwitch(label: "Smooth curves")
+    let magnetSwitch = ToggleSwitch(label: "Magnetic rest bands")
+    let holdSwitch = ToggleSwitch(label: "Hold the chart while idle")
+    let checkSwitch = ToggleSwitch(label: "Check for updates automatically")
+    let installSwitch = ToggleSwitch(label: "Install updates automatically")
+    let checkNowButton = FlatButton(title: "Check now", primary: false)
+    let gitHubLink = LinkButton(title: "", target: nil, action: nil)
+    var versionRow: SettingsRow!
+    var lastCheck: (date: Date, result: String)?
+    var checking = false
+    var pendingAutoInstall = false
+    // automatic start: armed while the encoder has been seen idle since the cycle last stopped
+    var autoStartArmed = true
+    var autoBusySeconds: Double = 0
+    /// The newest reading, for the menu bar: recorded even while the chart is held still.
+    var latestReading: Sample?
     var logExpanded = false
     var logCount = 0
 
@@ -1389,6 +1742,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         d.set(scene == "resting", forKey: "window")
         d.set(scene != "working", forKey: "chartCollapsed")
         d.set(scene == "resting", forKey: "logExpanded")
+        if scene == "settings" { d.set(["time"], forKey: "menuBarItems") }
         return d
     }()
     var threshold: Double { defaults.object(forKey: "threshold") == nil ? 50.0 : defaults.double(forKey: "threshold") }
@@ -1398,6 +1752,13 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     var workMinutes: Double { Double(max(1, committedWork)) }
     var restMinutes: Double { Double(max(1, committedRest)) }
     var detached: Bool { defaults.bool(forKey: "window") }
+    /// A stored switch, or its default while the user has never touched it.
+    func flag(_ key: String, _ fallback: Bool) -> Bool { defaults.object(forKey: key) == nil ? fallback : defaults.bool(forKey: key) }
+    var menuBarItems: [String] { defaults.stringArray(forKey: "menuBarItems") ?? ["time"] }
+    var appearanceChoice: String { defaults.string(forKey: "appearance") ?? "system" }
+    /// `--appearance light|dark` (tests and README renders) wins over the stored choice.
+    let forcedAppearance = CommandLine.arguments.contains("--appearance")
+    var logFileURL: URL { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Siesta/Siesta.log") }
 
     /// Cat icons for the four states: black template PNGs (menu bar 20 pt, panel 48 pt)
     /// that follow the appearance like system symbols.
@@ -1428,7 +1789,12 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         statusItem.button?.action = #selector(statusItemClicked)
         statusItem.button?.imagePosition = .imageLeft
         statusItem.button?.imageHugsTitle = true
+        // figures of one width: CPU and temperature change every few seconds without the item jumping
+        statusItem.button?.font = .monospacedDigitSystemFont(ofSize: NSFont.menuBarFont(ofSize: 0).pointSize, weight: .regular)
+        applyAppearance()
         buildPanel()
+        chart.smoothCurves = flag("smoothCurves", true)
+        chart.magneticBands = flag("magneticBands", true)
         let w = defaults.integer(forKey: "work"), r = defaults.integer(forKey: "rest")
         workField.integerValue = w == 0 ? 60 : w
         restField.integerValue = r == 0 ? 5 : r
@@ -1441,14 +1807,17 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         rescueFrozen()
         installSignalHandlers()
         installPopoverGlide()
+        installSettingsKeys()
         if let i = CommandLine.arguments.firstIndex(of: "--debug-update"), i + 1 < CommandLine.arguments.count {
             // shows the update chip for a made-up version without asking GitHub; "busy" shows it updating
             let v = CommandLine.arguments[i + 1]
             updateVersion = v == "busy" ? "9.9.9" : v
             showUpdate(version: updateVersion, url: URL(string: "https://github.com/\(App.repo)/releases")!)
             if v == "busy" { updateStatus("Updating…") }
-        } else { checkForUpdate() }
-        Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in self?.checkForUpdate() }
+        } else if flag("checkUpdates", true) { checkForUpdate() }
+        Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in
+            if self?.flag("checkUpdates", true) == true { self?.checkForUpdate() }
+        }
         refresh()
         if CommandLine.arguments.contains("--start") { toggleRun() }
         if let i = CommandLine.arguments.firstIndex(of: "--debug-panel"), i + 1 < CommandLine.arguments.count {
@@ -1462,14 +1831,35 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { self.toggleLog() }
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { NSApp.terminate(nil) }
         }
+        if debugPageAnimation {   // slides to the settings page and back, printing each frame, then quits
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.showSettings(true) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { self.showSettings(false) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { NSApp.terminate(nil) }
+        }
         if CommandLine.arguments.contains("--auto-update") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in self?.openUpdate() }
         }
         // The status item must be laid out before a popover can attach to it.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.showPanel() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.showPanel()
+            if CommandLine.arguments.contains("--debug-settings") { self?.showSettings(true, animated: false) }
+        }
     }
 
     func applicationWillTerminate(_ n: Notification) { resume() }
+
+    /// Esc leaves the settings page; closing the popover always brings back the main page.
+    func installSettingsKeys() {
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self, self.showingSettings, event.keyCode == 53,
+                  event.window === self.panelController.view.window else { return event }
+            self.showSettings(false)
+            return nil
+        }
+        NotificationCenter.default.addObserver(forName: NSPopover.didCloseNotification, object: popover, queue: .main) { [weak self] _ in
+            self?.showSettings(false, animated: false)
+        }
+    }
 
     var signalSources: [DispatchSourceSignal] = []
     /// kill / logout / Ctrl-C must never leave the encoder frozen.
@@ -1541,6 +1931,14 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         guard let i = CommandLine.arguments.firstIndex(of: "--debug-scene") else { return }
         let out = URL(fileURLWithPath: CommandLine.arguments[i + 2])
         refresh()   // the stopped state first, as at launch: starting the cycle then reveals the chart
+        if name == "settings" {   // the settings page with the pointer on the back button, as on the board
+            lastCheck = (Calendar.current.date(bySettingHour: 17, minute: 12, second: 0, of: Date())!, "ok")
+            showSettings(true, animated: false)
+            backButton.showHover()
+            layoutPanel()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self.renderPanel(to: out) }
+            return
+        }
         let resting = name == "resting"
         func at(_ h: Int, _ m: Int) -> Date { Calendar.current.date(bySettingHour: h, minute: m, second: 0, of: Date())! }
         let now = resting ? at(17, 45) : at(17, 40)
@@ -1690,18 +2088,18 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         quitButton.hoverFill = .systemRed
         quitButton.target = self; quitButton.action = #selector(quit)
         quitButton.setAccessibilityLabel("Quit Siesta")
-        // version (plain text) · ⓘ About (GitHub page) · Quit
+        // version (plain text) · settings gear · Quit
         versionLabel.font = .systemFont(ofSize: 11)
         versionLabel.textColor = .tertiaryLabelColor
         versionLabel.stringValue = "v\(currentVersion)"
         versionLabel.setContentHuggingPriority(.required, for: .horizontal)
-        aboutButton.restColor = .tertiaryLabelColor   // same grey as the version beside it
-        aboutButton.target = self; aboutButton.action = #selector(openAbout)
-        aboutButton.setContentHuggingPriority(.required, for: .horizontal)
-        let footer = NSStackView(views: [detachCheckbox, NSView(), versionLabel, aboutButton, quitButton])
+        settingsButton.restColor = .secondaryLabelColor   // lighter than the version: the version stays a detail
+        settingsButton.target = self; settingsButton.action = #selector(openSettings)
+        settingsButton.setContentHuggingPriority(.required, for: .horizontal)
+        let footer = NSStackView(views: [detachCheckbox, NSView(), versionLabel, settingsButton, quitButton])
         footer.orientation = .horizontal; footer.alignment = .centerY
-        footer.setCustomSpacing(App.versionToAbout, after: versionLabel)
-        footer.setCustomSpacing(App.aboutToQuit, after: aboutButton)
+        footer.setCustomSpacing(App.versionToGear, after: versionLabel)
+        footer.setCustomSpacing(App.gearToQuit, after: settingsButton)
         // update chip: its own row above the status, right aligned, only while an update exists
         updateChip.onClick = { [weak self] in self?.openUpdate() }
         let chipRow = NSStackView(views: [NSView(), updateChip])
@@ -1717,6 +2115,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
         let column = NSStackView(views: [chipRow, statusRow, progressWrap, chart, divider(), settings, divider(), logBox, footer])
         panelColumn = column
+        mainColumn = column
         column.orientation = .vertical
         column.alignment = .width
         column.spacing = 19
@@ -1734,16 +2133,11 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         }
 
         let background = BackgroundView()
-        background.addSubview(column)
         panelWidth = background.widthAnchor.constraint(equalToConstant: popoverWidth)
         panelWidth.priority = NSLayoutConstraint.Priority(999)
-        NSLayoutConstraint.activate([
-            column.topAnchor.constraint(equalTo: background.topAnchor),
-            column.leadingAnchor.constraint(equalTo: background.leadingAnchor),
-            column.trailingAnchor.constraint(equalTo: background.trailingAnchor),
-            column.bottomAnchor.constraint(lessThanOrEqualTo: background.bottomAnchor),
-            panelWidth,
-        ])
+        panelWidth.isActive = true
+        attachPage(column, in: background, offset: 0)
+        settingsColumn = buildSettings()
         background.autoresizingMask = [.width, .height]   // follow the popover / window content area
         panelController.view = background
         handCursor.attach(to: background)
@@ -1801,8 +2195,12 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         panelController.view.layoutSubtreeIfNeeded()
         // the container sizes the view: never set its frame by hand. Whole points only: with fractional
         // heights the popover re-rounds its position on every animation frame and its top edge trembles
+        guard pageTransition == nil else { return }   // the page slide sizes the panel itself
         let fitting = panelController.view.fittingSize
-        let size = NSSize(width: fitting.width.rounded(), height: fitting.height.rounded())
+        setPanelSize(NSSize(width: fitting.width.rounded(), height: fitting.height.rounded()))
+    }
+
+    func setPanelSize(_ size: NSSize) {
         if detached, let w = window, w.contentViewController === panelController {
             w.setContentSize(size)
         } else {
@@ -1926,6 +2324,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         }
     }
     let debugLogAnimation = CommandLine.arguments.contains("--debug-log-animation")
+    let debugPageAnimation = CommandLine.arguments.contains("--debug-page-animation")
 
     func clearLog() {
         logCount = 0
@@ -1937,6 +2336,263 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
     @objc func quit() { quitting = true; NSApp.terminate(nil) }
 
+    // MARK: Settings page
+    // The gear in the footer slides the panel over to the settings page: same width, same container
+    // (popover or detached window); the back chevron or Esc slides it back. Every change applies at once.
+    var pageLeading: NSLayoutConstraint!
+    var pageTrailing: NSLayoutConstraint!
+
+    /// Pins a page (the main column or the settings column) to the top of the panel, shifted by `offset`.
+    func attachPage(_ page: NSView, in background: NSView, offset: CGFloat) {
+        page.translatesAutoresizingMaskIntoConstraints = false
+        background.addSubview(page)
+        // below required, so the slide can size the panel between the two pages' heights
+        let bottom = page.bottomAnchor.constraint(lessThanOrEqualTo: background.bottomAnchor)
+        bottom.priority = NSLayoutConstraint.Priority(999)
+        pageLeading = page.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: offset)
+        pageTrailing = page.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: offset)
+        NSLayoutConstraint.activate([page.topAnchor.constraint(equalTo: background.topAnchor), pageLeading, pageTrailing, bottom])
+    }
+
+    func buildSettings() -> NSStackView {
+        backButton.onClick = { [weak self] in self?.showSettings(false) }
+        let pageTitle = NSTextField(labelWithString: "Settings")
+        pageTitle.font = .systemFont(ofSize: 16, weight: .medium)
+        let head = NSStackView(views: [backButton, pageTitle])
+        head.orientation = .horizontal; head.alignment = .centerY; head.spacing = 8
+        head.heightAnchor.constraint(equalToConstant: 34).isActive = true   // as tall as the status row
+
+        loginSwitch.onToggle = { [weak self] on in self?.setOpenAtLogin(on) }
+        appearancePicker.onChange = { [weak self] i in
+            self?.defaults.set(["system", "light", "dark"][i], forKey: "appearance")
+            self?.applyAppearance()
+        }
+        for (key, chip) in menuBarChips {
+            chip.onToggle = { [weak self] on in
+                guard let self = self else { return }
+                var items = Set(self.menuBarItems)
+                if on { items.insert(key) } else { items.remove(key) }
+                self.defaults.set(self.menuBarChips.map { $0.0 }.filter { items.contains($0) }, forKey: "menuBarItems")
+                self.updateMenuBarRow()
+                self.refresh()
+            }
+        }
+        let chips = NSStackView(views: menuBarChips.map { $0.1 })
+        chips.orientation = .horizontal; chips.spacing = 5
+        menuBarRow = SettingsRow("Menu bar", detail: "Next to the cat", control: chips)
+        let general = SettingsGroup(title: "General", rows: [
+            SettingsRow("Open at login", control: loginSwitch),
+            SettingsRow("Appearance", control: appearancePicker),
+            menuBarRow,
+        ])
+
+        autoStartSwitch.onToggle = { [weak self] on in
+            self?.defaults.set(on, forKey: "autoStart")
+            self?.autoBusySeconds = 0
+        }
+        logFileSwitch.onToggle = { [weak self] on in
+            self?.defaults.set(on, forKey: "logFile")
+            self?.updateLogFileRow()
+            if on { self?.log("Activity log saved to Library/Logs/Siesta") }
+        }
+        for link in [showLogLink, gitHubLink] { link.isBordered = false; link.font = .systemFont(ofSize: 11) }
+        showLogLink.text = "Show in Finder"
+        showLogLink.target = self; showLogLink.action = #selector(showLogFile)
+        logFileRow = SettingsRow("Save the activity log to a file", detail: "", link: showLogLink, control: logFileSwitch)
+        let cycle = SettingsGroup(title: "Cycle", rows: [
+            SettingsRow("Start automatically", detail: "When \(target.name) starts working", control: autoStartSwitch),
+            logFileRow,
+        ])
+
+        smoothSwitch.onToggle = { [weak self] on in
+            self?.defaults.set(on, forKey: "smoothCurves"); self?.chart.smoothCurves = on; self?.chart.needsDisplay = true
+        }
+        magnetSwitch.onToggle = { [weak self] on in
+            self?.defaults.set(on, forKey: "magneticBands"); self?.chart.magneticBands = on; self?.chart.needsDisplay = true
+        }
+        holdSwitch.onToggle = { [weak self] on in self?.defaults.set(on, forKey: "holdChart") }
+        let chartGroup = SettingsGroup(title: "Chart", rows: [
+            SettingsRow("Smooth curves", control: smoothSwitch),
+            SettingsRow("Magnetic rest bands", control: magnetSwitch),
+            SettingsRow("Hold the chart while idle", detail: "Stops scrolling while \(target.name) is not working", control: holdSwitch),
+        ])
+
+        checkSwitch.onToggle = { [weak self] on in
+            self?.defaults.set(on, forKey: "checkUpdates")
+            if on { self?.checkForUpdate() } else { self?.updateVersionRow() }
+        }
+        installSwitch.onToggle = { [weak self] on in self?.defaults.set(on, forKey: "autoInstall") }
+        gitHubLink.text = "GitHub"
+        gitHubLink.target = self; gitHubLink.action = #selector(openAbout)
+        gitHubLink.toolTip = "Siesta on GitHub"
+        checkNowButton.target = self; checkNowButton.action = #selector(checkNow)
+        checkNowButton.compact = true
+        versionRow = SettingsRow("Siesta \(currentVersion)", detail: "", link: gitHubLink, control: checkNowButton)
+        let updates = SettingsGroup(title: "Updates", rows: [
+            SettingsRow("Check for updates automatically", control: checkSwitch),
+            SettingsRow("Install updates automatically", control: installSwitch),
+            versionRow,
+        ])
+
+        let column = NSStackView(views: [head, general, cycle, chartGroup, updates])
+        column.orientation = .vertical; column.alignment = .width; column.spacing = 19
+        column.edgeInsets = NSEdgeInsets(top: App.topInset, left: 24, bottom: 20, right: 24)
+        for row in [general, cycle, chartGroup, updates] as [NSView] {
+            NSLayoutConstraint.activate([
+                row.leadingAnchor.constraint(equalTo: column.leadingAnchor, constant: 24),
+                row.trailingAnchor.constraint(equalTo: column.trailingAnchor, constant: -24),
+            ])
+        }
+        // the chevron's square starts 6 pt left of the column edge, so the chevron itself lines up with the boxes
+        head.leadingAnchor.constraint(equalTo: column.leadingAnchor, constant: 18).isActive = true
+        syncSettings()
+        return column
+    }
+
+    /// Puts every control in the state stored in the defaults (and, for login, in the system's).
+    func syncSettings() {
+        if App.scene == nil { loginSwitch.setOn(SMAppService.mainApp.status == .enabled, animated: false) }
+        appearancePicker.select(["system", "light", "dark"].firstIndex(of: appearanceChoice) ?? 0)
+        for (key, chip) in menuBarChips { chip.setOn(menuBarItems.contains(key)) }
+        updateMenuBarRow()
+        autoStartSwitch.setOn(flag("autoStart", false), animated: false)
+        logFileSwitch.setOn(flag("logFile", false), animated: false)
+        updateLogFileRow()
+        smoothSwitch.setOn(flag("smoothCurves", true), animated: false)
+        magnetSwitch.setOn(flag("magneticBands", true), animated: false)
+        holdSwitch.setOn(flag("holdChart", false), animated: false)
+        checkSwitch.setOn(flag("checkUpdates", true), animated: false)
+        installSwitch.setOn(flag("autoInstall", false), animated: false)
+        updateVersionRow()
+    }
+
+    func updateMenuBarRow() { menuBarRow?.detail.stringValue = menuBarItems.isEmpty ? "Only the cat" : "Next to the cat" }
+
+    func updateLogFileRow() {
+        let on = flag("logFile", false)
+        logFileRow?.detail.stringValue = on ? "In Library/Logs/Siesta · " : "In Library/Logs/Siesta"
+        showLogLink.isHidden = !on
+    }
+
+    /// The second line of the version row: the last check and its result, then the GitHub link.
+    func updateVersionRow() {
+        guard let row = versionRow else { return }
+        let f = DateFormatter(); f.dateFormat = "HH:mm"
+        let text: String
+        if updating { text = "Updating to \(updateVersion)" }
+        else if checking { text = "Checking…" }
+        else if updateURL != nil { text = "Version \(updateVersion) available" }
+        else if let last = lastCheck {
+            text = last.result == "failed" ? "Could not check at \(f.string(from: last.date))" : "Up to date · checked at \(f.string(from: last.date))"
+        } else { text = flag("checkUpdates", true) ? "Not checked yet" : "Automatic checks off" }
+        row.detail.stringValue = text + " · "
+        checkNowButton.isEnabled = !checking && !updating
+    }
+
+    @objc func openSettings() { showSettings(true) }
+    @objc func checkNow() { checkForUpdate() }
+
+    /// Slides between the main page and the settings page over 0.22 s, the panel growing or shrinking
+    /// to the new page's height at the same pace. The outgoing page leaves as a snapshot.
+    func showSettings(_ on: Bool, animated: Bool = true) {
+        guard on != showingSettings, pageTransition == nil else { return }
+        let bg = panelController.view
+        if on { syncSettings() }
+        bg.window?.makeFirstResponder(nil)
+        let from: NSView = on ? mainColumn : settingsColumn
+        let to: NSView = on ? settingsColumn : mainColumn
+        let width = bg.bounds.width, dir: CGFloat = on ? 1 : -1
+        let fromHeight = bg.bounds.height
+        var snapshot: NSImageView?
+        if animated, bg.window?.isVisible == true, let rep = from.bitmapImageRepForCachingDisplay(in: from.bounds) {
+            from.cacheDisplay(in: from.bounds, to: rep)
+            let image = NSImage(size: from.bounds.size); image.addRepresentation(rep)
+            let v = NSImageView(frame: from.frame)
+            v.image = image; v.imageScaling = .scaleNone
+            v.autoresizingMask = [.minYMargin]   // keeps its place under the top edge while the panel resizes
+            snapshot = v
+        }
+        from.removeFromSuperview()
+        showingSettings = on
+        attachPage(to, in: bg, offset: snapshot == nil ? 0 : dir * width)
+        guard let snap = snapshot else { layoutPanel(); return }
+        bg.addSubview(snap)
+        bg.layoutSubtreeIfNeeded()
+        let fitting = bg.fittingSize
+        let target = NSSize(width: fitting.width.rounded(), height: fitting.height.rounded())
+        let startX = snap.frame.minX, start = Date(), duration = 0.22
+        pageTransition = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
+            guard let self = self else { timer.invalidate(); return }
+            let p = min(1, Date().timeIntervalSince(start) / duration)
+            let e = CGFloat(p < 0.5 ? 2 * p * p : 1 - pow(-2 * p + 2, 2) / 2)
+            self.pageLeading.constant = dir * width * (1 - e)
+            self.pageTrailing.constant = dir * width * (1 - e)
+            snap.frame.origin.x = startX - dir * width * e
+            snap.alphaValue = 1 - e
+            self.setPanelSize(NSSize(width: target.width, height: (fromHeight + (target.height - fromHeight) * e).rounded()))
+            if self.debugPageAnimation {
+                let f = bg.window?.frame ?? .zero
+                self.debugPrint(String(format: "PAGE p %.2f offset %.1f snapshot x %.1f window w %.0f h %.0f top %.1f", p, self.pageLeading.constant, snap.frame.minX, f.width, f.height, f.maxY))
+            }
+            if p >= 1 {
+                timer.invalidate()
+                self.pageTransition = nil
+                snap.removeFromSuperview()
+                self.pageLeading.constant = 0; self.pageTrailing.constant = 0
+                self.layoutPanel()
+                bg.window?.invalidateCursorRects(for: bg)
+            }
+        }
+    }
+
+    func applyAppearance() {
+        guard !forcedAppearance else { return }
+        let choice: NSAppearance? = appearanceChoice == "light" ? NSAppearance(named: .aqua)
+            : appearanceChoice == "dark" ? NSAppearance(named: .darkAqua) : nil
+        NSApp.appearance = choice
+        popover.appearance = choice
+    }
+
+    func setOpenAtLogin(_ on: Bool) {
+        guard App.scene == nil else { return }
+        let service = SMAppService.mainApp
+        do {
+            if on { try service.register() } else { try service.unregister() }
+            log(on ? "Siesta opens at login" : "Siesta no longer opens at login")
+        } catch {
+            log("Open at login: \(error.localizedDescription)")
+        }
+        loginSwitch.setOn(service.status == .enabled, animated: true)
+        if service.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
+    }
+
+    /// What the menu bar shows next to the cat: the chosen items in a fixed order, two spaces apart.
+    func menuBarText(time: String) -> String {
+        let items = menuBarItems
+        var parts: [String] = []
+        if items.contains("time"), !time.isEmpty { parts.append(time) }
+        if items.contains("cpu"), let r = latestReading { parts.append("\(Int(r.cpu.rounded()))%") }
+        if items.contains("temp"), let t = latestReading?.temp { parts.append("\(Int(t.rounded()))°") }
+        return parts.joined(separator: "  ")
+    }
+
+    func appendToLogFile(_ s: String) {
+        let url = logFileURL
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        guard let data = "\(f.string(from: Date()))  \(s)\n".data(using: .utf8) else { return }
+        if let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile(); handle.write(data); try? handle.close()
+        } else {
+            try? data.write(to: url)
+        }
+    }
+
+    @objc func showLogFile() {
+        if !FileManager.default.fileExists(atPath: logFileURL.path) { appendToLogFile("Log file created") }
+        NSWorkspace.shared.activateFileViewerSelecting([logFileURL])
+    }
+
     // MARK: Version and update check
     static let repo = "Interstellar0verdrive/Siesta"
     var currentVersion: String {
@@ -1946,7 +2602,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         return Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
     }
 
-    static let versionToAbout: CGFloat = 4, aboutToQuit: CGFloat = 9   // frame gaps; ink gaps are measured
+    static let versionToGear: CGFloat = 5, gearToQuit: CGFloat = 8   // frame gaps for 7 and 9 pt of ink, measured in the render
     static let chipToStatus: CGFloat = 16, chipTopInset: CGFloat = 14, topInset: CGFloat = 22
 
     @objc func openAbout() {
@@ -2009,6 +2665,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     }
 
     func updateStatus(_ text: String) {
+        updateVersionRow()
         updateChip.title = text
         updateChip.busy = true
         updateChip.toolTip = nil
@@ -2016,6 +2673,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
     func updateFailed(_ reason: String) {
         updating = false
+        defer { updateVersionRow() }
         log("Update failed: \(reason)")
         if let url = updateURL { showUpdate(version: updateVersion, url: url) }
     }
@@ -2095,14 +2753,24 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     }
 
     func checkForUpdate() {
-        guard let url = URL(string: "https://api.github.com/repos/\(App.repo)/releases/latest") else { return }
+        guard !checking, !updating, let url = URL(string: "https://api.github.com/repos/\(App.repo)/releases/latest") else { return }
+        checking = true
+        updateVersionRow()
         var req = URLRequest(url: url, timeoutInterval: 15)
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
-            guard let self = self, let data = data,
+            guard let self = self else { return }
+            guard let data = data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let tag = json["tag_name"] as? String,
-                  let page = (json["html_url"] as? String).flatMap(URL.init(string:)) else { return }
+                  let page = (json["html_url"] as? String).flatMap(URL.init(string:)) else {
+                DispatchQueue.main.async {
+                    self.checking = false
+                    self.lastCheck = (Date(), "failed")
+                    self.updateVersionRow()
+                }
+                return
+            }
             let latest = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
             let assets = json["assets"] as? [[String: Any]] ?? []
             func asset(_ suffix: String) -> URL? {
@@ -2111,11 +2779,18 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             }
             let zip = asset(".zip"), sha = asset(".zip.sha256")
             DispatchQueue.main.async {
+                self.checking = false
+                self.lastCheck = (Date(), "ok")
+                defer { self.updateVersionRow() }
                 guard !self.updating else { return }
                 if self.isNewer(latest, than: self.currentVersion) {
                     self.updateZip = zip; self.updateSha = sha; self.updateVersion = latest
                     self.showUpdate(version: latest, url: page)
-                    self.announceUpdate(latest)
+                    if self.flag("autoInstall", false) && self.canSelfUpdate && zip != nil && sha != nil {
+                        // never in the middle of a cycle: a relaunch would stop it; wait for the cycle to stop
+                        if self.phase == .stopped { self.log("Installing Siesta \(latest) automatically"); self.performUpdate() }
+                        else { self.pendingAutoInstall = true }
+                    } else { self.announceUpdate(latest) }
                 } else { self.showVersion() }
             }
         }.resume()
@@ -2135,6 +2810,12 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             resume()
             phase = .stopped
             log("Cycle stopped")
+            autoStartArmed = false   // stopped by hand while encoding: wait for the encoder to go idle first
+            autoBusySeconds = 0
+            if pendingAutoInstall {
+                pendingAutoInstall = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.performUpdate() }
+            }
         }
         refresh()
     }
@@ -2224,10 +2905,15 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let t = Date.timeIntervalSinceReferenceDate
         // dense while the chart is still filling its first 5 minutes, then one point every 5 s
         let every: TimeInterval = (chart.samples.first.map { t - $0.t } ?? 0) < chart.minWindow ? 1 : 5
-        if let last = chart.samples.last?.t, t - last < every - 0.5 { return }
+        if let last = latestReading?.t, t - last < every - 0.5 { return }
         let cpu = cpuSum / Double(cpuTicks)
         cpuSum = 0; cpuTicks = 0
-        chart.samples.append(Sample(t: t, cpu: cpu, temp: thermometer.hottest(), resting: phase == .resting))
+        let reading = Sample(t: t, cpu: cpu, temp: thermometer.hottest(), resting: phase == .resting)
+        latestReading = reading
+        // "Hold the chart while idle": no new points while the encoder is not working, so the chart stands still
+        let working = phase == .resting || (phase == .working && isEncoding)
+        if flag("holdChart", false) && !working { return }
+        chart.samples.append(reading)
         if debugSamples, let s = chart.samples.last {
             debugPrint(String(format: "SAMPLE cpu %.1f%% of the Mac (%.0f%% of one core)  temp %@  %@", s.cpu, s.cpu * coreCount,
                               s.temp.map { String(format: "%.1f °C", $0) } ?? "n/a", s.resting ? "resting" : "working"))
@@ -2251,7 +2937,18 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         lastTick = now
         switch phase {
         case .stopped:
-            record(cpu: targetProcesses().reduce(0) { $0 + $1.cpu })
+            let total = targetProcesses().reduce(0) { $0 + $1.cpu }
+            record(cpu: total)
+            // "Start automatically": a few seconds of real work after the encoder was last seen idle
+            if flag("autoStart", false) {
+                if total >= threshold { autoBusySeconds += dt } else { autoBusySeconds = 0; autoStartArmed = true }
+                if autoStartArmed && autoBusySeconds >= 3 {
+                    autoStartArmed = false; autoBusySeconds = 0
+                    log("\(target.name) started working · cycle started automatically")
+                    toggleRun()
+                    return
+                }
+            }
         case .working:
             let procs = targetProcesses()
             let totalCpu = procs.reduce(0) { $0 + $1.cpu }
@@ -2313,13 +3010,14 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     /// `--debug-samples`: every log line and chart point also goes to stdout, for checking the numbers in a test run.
     let debugSamples = CommandLine.arguments.contains("--debug-samples")
     func debugPrint(_ s: String) {
-        guard debugSamples || debugLogAnimation else { return }
+        guard debugSamples || debugLogAnimation || debugPageAnimation else { return }
         let f = DateFormatter(); f.dateFormat = "HH:mm:ss"
         print("\(f.string(from: Date())) \(s)"); fflush(stdout)
     }
 
     func log(_ s: String) {
         debugPrint("LOG " + s)
+        if App.scene == nil && flag("logFile", false) { appendToLogFile(s) }
         if logCount == 0 { logView.textStorage?.setAttributedString(NSAttributedString(string: "")) }
         let f = DateFormatter(); f.dateFormat = "HH:mm"
         let para = NSMutableParagraphStyle()
@@ -2345,7 +3043,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         statusSubtitle.stringValue = subtitle
         countdown.stringValue = count
         statusItem.button?.image = App.stateIcon(state, panel: false, description: description)
-        statusItem.button?.title = barTitle
+        statusItem.button?.title = menuBarText(time: barTitle)
         statusItem.button?.toolTip = "Siesta — " + tooltip
         if popover.isShown {
             // the button may have changed width: re-centre the arrow after layout
