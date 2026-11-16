@@ -252,7 +252,19 @@ final class ProcessSampler {
 }
 
 // MARK: - CPU & temperature chart
-struct Sample { let t: TimeInterval; let cpu: Double; let temp: Double?; let resting: Bool }
+struct Sample {
+    /// Where the sample sits on the chart: the wall clock, minus the idle stretches cut out while
+    /// "Hold the chart while idle" is on, so the line carries on where it stopped.
+    let t: TimeInterval
+    let cpu: Double; let temp: Double?; let resting: Bool
+    /// The real time of the sample, shown on the axis and under the pointer.
+    let clock: TimeInterval
+    /// First sample after such a cut: the line breaks here and a hairline marks the seam.
+    let cut: Bool
+    init(t: TimeInterval, cpu: Double, temp: Double?, resting: Bool, clock: TimeInterval? = nil, cut: Bool = false) {
+        self.t = t; self.cpu = cpu; self.temp = temp; self.resting = resting; self.clock = clock ?? t; self.cut = cut
+    }
+}
 
 final class ChartView: NSView, HandCursorView {
     var samples: [Sample] = []
@@ -386,6 +398,14 @@ final class ChartView: NSView, HandCursorView {
     }
 
     func visibleSamples(_ a: TimeInterval, _ b: TimeInterval) -> [Sample] { samples.filter { $0.t >= a && $0.t <= b } }
+    /// The real time at a point of the chart: the clock of the sample at or before it, plus the distance from it.
+    func clock(at t: TimeInterval) -> TimeInterval {
+        guard let first = samples.first else { return t }
+        var lo = 0, hi = samples.count - 1
+        if t <= first.t { return first.clock + (t - first.t) }
+        while lo < hi { let mid = (lo + hi + 1) / 2; if samples[mid].t <= t { lo = mid } else { hi = mid - 1 } }
+        return samples[lo].clock + (t - samples[lo].t)
+    }
     /// The left edge may sit anywhere from the first sample up to a few seconds before the newest one:
     /// empty space on the right is fine (the view fills up as time passes), empty space on the left is not.
     func clampStart(_ start: TimeInterval, span: TimeInterval) -> TimeInterval {
@@ -665,6 +685,12 @@ final class ChartView: NSView, HandCursorView {
                 restStart = nil
             }
         }
+        // seams where idle time was cut out: a faint hairline halfway between the samples either side
+        NSColor.labelColor.withAlphaComponent(0.2).setFill()
+        for i in 1..<max(1, samples.count) where samples[i].cut && samples[i].t >= tStart && samples[i - 1].t <= tEnd {
+            let sx = (x(samples[i - 1].t) + x(samples[i].t)) / 2
+            NSRect(x: sx.rounded() - 0.5, y: plotsBottom, width: 1, height: plotsTop - plotsBottom).fill()
+        }
         // divider between the lanes and baseline above the time axis
         NSColor.labelColor.withAlphaComponent(0.22).setStroke()
         for y in [cpuLane.minY - gap / 2, tempLane.minY] {
@@ -692,7 +718,7 @@ final class ChartView: NSView, HandCursorView {
             for smp in visible {
                 guard let v = value(smp) else { continue }
                 let k = Int(floor(smp.t / bucketSeconds))
-                let gap = lastT.map { smp.t - $0 > ChartView.gapSeconds } ?? false
+                let gap = (lastT.map { smp.t - $0 > ChartView.gapSeconds } ?? false) || (smp.cut && lastT != nil)
                 if k != bucket || smp.resting != resting || gap {
                     flush(); bucket = k; resting = smp.resting; accV = 0; accX = 0; n = 0
                     if gap { runs.append([]) }
@@ -767,21 +793,24 @@ final class ChartView: NSView, HandCursorView {
         let labelCount = min(bounds.width > 420 ? 6 : 4, max(2, Int(w / 60)))   // never closer than a minute
         let f = DateFormatter(); f.dateFormat = w < 120 ? "HH:mm:ss" : "HH:mm"
         let hx: CGFloat? = hover.map { x($0.t) }
+        // the right-hand label ("Now", or the time at the right edge) is drawn right aligned 14 pt past its anchor
+        let rightText = nowVisible ? "Now" : f.string(from: Date(timeIntervalSinceReferenceDate: clock(at: tEnd)))
+        let rightLeftEdge = (nowVisible ? nx : plotRight) + 14
+            - NSAttributedString(string: rightText, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)]).size().width
         var previous = ""
         for i in 0..<labelCount {
             let t = tStart + w * Double(i) / Double(labelCount)          // spread over the visible window
             let tx = x(t)
-            let rightX = nowVisible ? nx : plotRight
-            let label = f.string(from: Date(timeIntervalSinceReferenceDate: t))
+            let label = f.string(from: Date(timeIntervalSinceReferenceDate: clock(at: t)))
             let lw = NSAttributedString(string: label, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)]).size().width
             let lx = i == 0 ? plotLeft : tx - lw / 2
             let clearOfHover = hx.map { abs($0 - (lx + lw / 2)) > lw + 6 } ?? true
-            guard t <= last.t, rightX - (lx + lw) > 8, clearOfHover, label != previous else { continue }
+            guard t <= last.t, rightLeftEdge - (lx + lw) > 8, clearOfHover, label != previous else { continue }
             previous = label
             text(label, NSPoint(x: lx, y: 7), .secondaryLabelColor)
         }
         if let hoverAt = hover?.t, let hx = hx {
-            let label = f.string(from: Date(timeIntervalSinceReferenceDate: hoverAt))
+            let label = f.string(from: Date(timeIntervalSinceReferenceDate: clock(at: hoverAt)))
             let lw = NSAttributedString(string: label, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)]).size().width
             let lx = min(max(hx - lw / 2, 0), bounds.width - lw)   // centred on the line, kept inside the view
             text(label, NSPoint(x: lx, y: 7), .labelColor, .semibold)
@@ -790,8 +819,7 @@ final class ChartView: NSView, HandCursorView {
             rightLabel()
         }
         func rightLabel() {
-            if nowVisible { text("Now", NSPoint(x: nx + 14, y: 7), .secondaryLabelColor, .medium, right: true) }
-            else { text(f.string(from: Date(timeIntervalSinceReferenceDate: tEnd)), NSPoint(x: plotRight + 14, y: 7), .secondaryLabelColor, .medium, right: true) }
+            text(rightText, NSPoint(x: (nowVisible ? nx : plotRight) + 14, y: 7), .secondaryLabelColor, .medium, right: true)
         }
     }
 }
@@ -3021,23 +3049,34 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         // each tick measures only its own second: a chart point is the mean of the ticks since the last one
         cpuSum += percentOfMachine(rawCpu); cpuTicks += 1
         let t = Date.timeIntervalSinceReferenceDate
+        let chartNow = t - heldTime
         // dense while the chart is still filling its first 5 minutes, then one point every 5 s
-        let every: TimeInterval = (chart.samples.first.map { t - $0.t } ?? 0) < chart.minWindow ? 1 : 5
+        let every: TimeInterval = (chart.samples.first.map { chartNow - $0.t } ?? 0) < chart.minWindow ? 1 : 5
         if let last = latestReading?.t, t - last < every - 0.5 { return }
         let cpu = cpuSum / Double(cpuTicks)
         cpuSum = 0; cpuTicks = 0
-        let reading = Sample(t: t, cpu: cpu, temp: thermometer.hottest(), resting: phase == .resting)
-        latestReading = reading
-        // "Hold the chart while idle": no new points while the encoder is not working, so the chart stands still
-        let working = phase == .resting || (phase == .working && isEncoding)
-        if flag("holdChart", false) && !working { return }
-        chart.samples.append(reading)
+        let temp = thermometer.hottest()
+        latestReading = Sample(t: t, cpu: cpu, temp: temp, resting: phase == .resting)
+        // "Hold the chart while idle": no new points while the encoder is not working, so the chart stands
+        // still; when work comes back the idle stretch is cut out and the line carries on where it stopped.
+        // Working means busy now, whether or not a cycle runs (Start automatically waits a few seconds).
+        let working = phase == .resting || (phase == .working && isEncoding) || rawCpu >= threshold
+        if flag("holdChart", false) && !working { holding = true; return }
+        var cut = false
+        if holding {
+            holding = false
+            if let lastT = chart.samples.last?.t, chartNow - lastT > every + 0.5 {
+                heldTime += chartNow - lastT - every
+                cut = true
+            }
+        }
+        chart.samples.append(Sample(t: t - heldTime, cpu: cpu, temp: temp, resting: phase == .resting, clock: t, cut: cut))
         if debugSamples, let s = chart.samples.last {
             debugPrint(String(format: "SAMPLE cpu %.1f%% of the Mac (%.0f%% of one core)  temp %@  %@", s.cpu, s.cpu * coreCount,
                               s.temp.map { String(format: "%.1f °C", $0) } ?? "n/a", s.resting ? "resting" : "working"))
         }
         chart.noteNewSample()
-        if let first = chart.samples.first?.t, t - first > chart.maxWindow + 60 {
+        if let first = chart.samples.first?.t, t - heldTime - first > chart.maxWindow + 60 {
             chart.samples.removeFirst(chart.samples.count / 10)   // trim in chunks, cheap
         }
         // folded: refresh the header values only every 5 s, the data keeps its own cadence
@@ -3048,6 +3087,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     }
     var lastCollapsedRefresh: TimeInterval = 0
     var cpuSum = 0.0, cpuTicks = 0
+    /// Idle time cut out of the chart so far, and whether an idle stretch is being held right now.
+    var heldTime: TimeInterval = 0, holding = false
 
     func tick() {
         let now = Date()
@@ -3335,6 +3376,33 @@ if let i = CommandLine.arguments.firstIndex(of: "--debug-legend"), i + 1 < Comma
                   "legend text", chart.legend.attributedStringValue.string)
         }
     }
+    exit(0)
+}
+if let i = CommandLine.arguments.firstIndex(of: "--debug-hold"), i + 1 < CommandLine.arguments.count {
+    // "Hold the chart while idle": 105 s idle, held for 140 s, then work; the idle stretch is cut out,
+    // the axis keeps the real times. Dark, as in the popover.
+    let t0 = Calendar.current.date(bySettingHour: 21, minute: 59, second: 0, of: Date())!.timeIntervalSinceReferenceDate
+    var samples: [Sample] = []
+    for k in 0...105 { let t = t0 + Double(k); samples.append(Sample(t: t, cpu: 3, temp: 62 + 8 * sin(Double(k) / 7), resting: false)) }
+    let held = 140.0
+    for k in 106...130 {
+        samples.append(Sample(t: t0 + Double(k), cpu: 40 + Double(k - 106), temp: 90 + Double(k - 106) * 0.7, resting: false, clock: t0 + Double(k) + held, cut: k == 106)) }
+    let chart = ChartView()
+    chart.frame = NSRect(x: 0, y: 0, width: 380, height: chart.fullHeight)
+    chart.samples = samples
+    let appearance = NSAppearance(named: .darkAqua)!
+    let host = NSWindow(contentRect: chart.frame, styleMask: [.borderless], backing: .buffered, defer: true)
+    host.appearance = appearance; host.contentView = chart
+    appearance.performAsCurrentDrawingAppearance { chart.cacheDisplay(in: chart.bounds, to: chart.bitmapImageRepForCachingDisplay(in: chart.bounds)!) }
+    chart.layoutSubtreeIfNeeded()
+    let rep = chart.bitmapImageRepForCachingDisplay(in: chart.bounds)!
+    appearance.performAsCurrentDrawingAppearance { chart.cacheDisplay(in: chart.bounds, to: rep) }
+    let image = NSImage(size: chart.bounds.size)
+    image.lockFocus()
+    NSColor(white: 0.17, alpha: 1).setFill(); chart.bounds.fill()
+    rep.draw(in: chart.bounds, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+    image.unlockFocus()
+    if let tiff = image.tiffRepresentation { try? NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: CommandLine.arguments[i + 1])) }
     exit(0)
 }
 if CommandLine.arguments.contains("--debug-magnet") {
