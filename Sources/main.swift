@@ -1123,10 +1123,10 @@ final class LinkButton: NSButton, HandCursorView {
 /// Small symbol button: secondary colour at rest, full label colour under the pointer, hand cursor.
 final class HoverIconButton: NSButton, HandCursorView {
     var hovered = false { didSet { contentTintColor = hovered ? .labelColor : .secondaryLabelColor } }
-    init(symbol: String, pointSize: CGFloat, label: String) {
+    init(symbol: String, pointSize: CGFloat, label: String, weight: NSFont.Weight = .semibold) {
         super.init(frame: .zero)
         image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)?
-            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: pointSize, weight: .semibold))
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: pointSize, weight: weight))
         isBordered = false; imagePosition = .imageOnly
         contentTintColor = .secondaryLabelColor
         toolTip = label
@@ -1141,6 +1141,72 @@ final class HoverIconButton: NSButton, HandCursorView {
     override func mouseExited(with event: NSEvent) { hovered = false }
     override func resetCursorRects() { if isEnabled { addCursorRect(bounds, cursor: .pointingHand) } }
     func wantsHandCursor(at point: NSPoint) -> Bool { isEnabled && !isHidden && alphaValue > 0 }
+}
+
+/// Pill shown above the status only while a new version is available: accent tint, hand cursor,
+/// fuller fill under the pointer. While updating it greys out and ignores clicks.
+final class UpdateChip: NSView, HandCursorView {
+    let icon = NSImageView()
+    let label = NSTextField(labelWithString: "")
+    var onClick: (() -> Void)?
+    var busy = false { didSet { restyle() } }
+    private var hovered = false { didSet { needsDisplay = true } }
+    private var pressed = false { didSet { needsDisplay = true } }
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 11
+        icon.image = NSImage(systemSymbolName: "arrow.down.circle.fill", accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 12, weight: .medium))
+        icon.setContentHuggingPriority(.required, for: .horizontal)
+        label.font = .systemFont(ofSize: 12, weight: .medium)
+        let row = NSStackView(views: [icon, label])
+        row.orientation = .horizontal; row.alignment = .centerY; row.spacing = 5
+        row.edgeInsets = NSEdgeInsets(top: 0, left: 6, bottom: 0, right: 9)
+        row.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(row)
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: leadingAnchor), row.trailingAnchor.constraint(equalTo: trailingAnchor),
+            row.centerYAnchor.constraint(equalTo: centerYAnchor), heightAnchor.constraint(equalToConstant: 22),
+        ])
+        setAccessibilityElement(true); setAccessibilityRole(.button)
+        restyle()
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    var title: String {
+        get { label.stringValue }
+        set { label.stringValue = newValue; setAccessibilityLabel(newValue) }
+    }
+    private func restyle() {
+        let tint: NSColor = busy ? .secondaryLabelColor : .controlAccentColor
+        label.textColor = tint; icon.contentTintColor = tint
+        needsDisplay = true
+        window?.invalidateCursorRects(for: self)
+    }
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {
+        let fill = busy ? NSColor.labelColor.withAlphaComponent(0.07)
+            : NSColor.controlAccentColor.withAlphaComponent(pressed ? 0.34 : hovered ? 0.26 : 0.16)
+        easeLayerColor(layer, "backgroundColor", to: fill.cgColor)
+    }
+    override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); needsDisplay = true }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil))
+    }
+    override func mouseEntered(with event: NSEvent) { hovered = true }
+    override func mouseExited(with event: NSEvent) { hovered = false; pressed = false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseDown(with event: NSEvent) { if !busy { pressed = true } }
+    override func mouseUp(with event: NSEvent) {
+        guard pressed else { return }
+        pressed = false
+        if bounds.contains(convert(event.locationInWindow, from: nil)) { onClick?() }
+    }
+    override func accessibilityPerformPress() -> Bool { if !busy { onClick?() }; return true }
+    override func resetCursorRects() { if !busy { addCursorRect(bounds, cursor: .pointingHand) } }
+    func wantsHandCursor(at point: NSPoint) -> Bool { !busy && !isHidden }
 }
 
 /// Flat button in the prototype style: rounded 8 pt, thin border, generous padding.
@@ -1233,7 +1299,11 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     let runButton = FlatButton(title: "Start cycle", primary: true)
     let detachCheckbox = StyledCheckbox(title: "Detached window")
     let logBox = LogBoxView()
-    let versionLink = LinkButton(title: "", target: nil, action: nil)
+    let versionLabel = NSTextField(labelWithString: "")
+    let aboutButton = HoverIconButton(symbol: "info.circle", pointSize: 13, label: "About Siesta", weight: .regular)
+    let updateChip = UpdateChip()
+    var updateRow: NSView!
+    var panelColumn: NSStackView!
     var updateURL: URL?
     var updateZip: URL?
     var updateSha: URL?
@@ -1308,7 +1378,13 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         rescueFrozen()
         installSignalHandlers()
         installPopoverGlide()
-        checkForUpdate()
+        if let i = CommandLine.arguments.firstIndex(of: "--debug-update"), i + 1 < CommandLine.arguments.count {
+            // shows the update chip for a made-up version without asking GitHub; "busy" shows it updating
+            let v = CommandLine.arguments[i + 1]
+            updateVersion = v == "busy" ? "9.9.9" : v
+            showUpdate(version: updateVersion, url: URL(string: "https://github.com/\(App.repo)/releases")!)
+            if v == "busy" { updateStatus("Updating…") }
+        } else { checkForUpdate() }
         Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in self?.checkForUpdate() }
         refresh()
         if CommandLine.arguments.contains("--start") { toggleRun() }
@@ -1468,13 +1544,23 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         quitButton.hoverFill = .systemRed
         quitButton.target = self; quitButton.action = #selector(quit)
         quitButton.setAccessibilityLabel("Quit Siesta")
-        versionLink.isBordered = false
-        versionLink.target = self; versionLink.action = #selector(openUpdate)
-        versionLink.setContentHuggingPriority(.required, for: .horizontal)
-        showVersion()
-        let footer = NSStackView(views: [detachCheckbox, NSView(), versionLink, quitButton])
+        // version (plain text) · ⓘ About (GitHub page) · Quit
+        versionLabel.font = .systemFont(ofSize: 11)
+        versionLabel.textColor = .tertiaryLabelColor
+        versionLabel.stringValue = "v\(currentVersion)"
+        versionLabel.setContentHuggingPriority(.required, for: .horizontal)
+        aboutButton.target = self; aboutButton.action = #selector(openAbout)
+        aboutButton.setContentHuggingPriority(.required, for: .horizontal)
+        let footer = NSStackView(views: [detachCheckbox, NSView(), versionLabel, aboutButton, quitButton])
         footer.orientation = .horizontal; footer.alignment = .centerY
-        footer.setCustomSpacing(12, after: versionLink)
+        footer.setCustomSpacing(App.versionToAbout, after: versionLabel)
+        footer.setCustomSpacing(App.aboutToQuit, after: aboutButton)
+        // update chip: its own row above the status, right aligned, only while an update exists
+        updateChip.onClick = { [weak self] in self?.openUpdate() }
+        let chipRow = NSStackView(views: [NSView(), updateChip])
+        chipRow.orientation = .horizontal; chipRow.alignment = .centerY
+        chipRow.isHidden = true
+        updateRow = chipRow
         detachCheckbox.setContentCompressionResistancePriority(.required, for: .horizontal)   // never truncate the label
         // Tab order: Work → Rest → Start/Stop → Quit → Work
         workField.nextKeyView = restField
@@ -1482,16 +1568,18 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         runButton.nextKeyView = quitButton
         quitButton.nextKeyView = workField
 
-        let column = NSStackView(views: [statusRow, progressWrap, chart, divider(), settings, divider(), logBox, footer])
+        let column = NSStackView(views: [chipRow, statusRow, progressWrap, chart, divider(), settings, divider(), logBox, footer])
+        panelColumn = column
         column.orientation = .vertical
         column.alignment = .width
         column.spacing = 19
+        column.setCustomSpacing(App.chipToStatus, after: chipRow)
         column.setCustomSpacing(19, after: progressWrap)
         column.setCustomSpacing(19, after: chart)
-        column.edgeInsets = NSEdgeInsets(top: 22, left: 24, bottom: 20, right: 24)
+        column.edgeInsets = NSEdgeInsets(top: App.topInset, left: 24, bottom: 20, right: 24)
         column.translatesAutoresizingMaskIntoConstraints = false
         // the column does not reliably stretch children with an intrinsic width: pin every row to the edges
-        for row in [statusRow, progressWrap, chart, settings, logBox, footer] as [NSView] {
+        for row in [chipRow, statusRow, progressWrap, chart, settings, logBox, footer] as [NSView] {
             NSLayoutConstraint.activate([
                 row.leadingAnchor.constraint(equalTo: column.leadingAnchor, constant: 24),
                 row.trailingAnchor.constraint(equalTo: column.trailingAnchor, constant: -24),
@@ -1711,25 +1799,35 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         return Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
     }
 
+    static let versionToAbout: CGFloat = 4, aboutToQuit: CGFloat = 9   // frame gaps; ink gaps are measured
+    static let chipToStatus: CGFloat = 16, chipTopInset: CGFloat = 14, topInset: CGFloat = 22
+
+    @objc func openAbout() {
+        if let url = URL(string: "https://github.com/\(App.repo)") { NSWorkspace.shared.open(url) }
+    }
+
+    /// Shows or hides the update row; the panel grows only while it is there.
+    func setUpdateChip(visible: Bool) {
+        guard let row = updateRow, row.isHidden == visible else { return }
+        row.isHidden = !visible
+        panelColumn.edgeInsets.top = visible ? App.chipTopInset : App.topInset
+        layoutPanel()
+    }
+
     func showVersion() {
         updateURL = nil
-        versionLink.attributedTitle = NSAttributedString(string: "v\(currentVersion)", attributes: [
-            .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.tertiaryLabelColor])
-        versionLink.isEnabled = false
-        versionLink.toolTip = nil
-        versionLink.window?.invalidateCursorRects(for: versionLink)
+        updateChip.busy = false
+        setUpdateChip(visible: false)
     }
 
     func showUpdate(version: String, url: URL) {
         updateURL = url
-        versionLink.attributedTitle = NSAttributedString(string: "Update to \(version)", attributes: [
-            .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.labelColor,
-            .underlineStyle: NSUnderlineStyle.single.rawValue])
-        versionLink.isEnabled = true
-        versionLink.toolTip = canSelfUpdate && updateZip != nil
+        updateChip.title = "Update to \(version)"
+        updateChip.busy = false
+        updateChip.toolTip = canSelfUpdate && updateZip != nil
             ? "Download and install Siesta \(version) in place, then relaunch"
             : "Open the release page"
-        versionLink.window?.invalidateCursorRects(for: versionLink)
+        setUpdateChip(visible: true)
     }
 
     /// Mentions a new release once per version: the footer link alone is easy to miss.
@@ -1740,8 +1838,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         alert.icon = App.appArtwork()
         alert.messageText = "Siesta \(version) is available"
         alert.informativeText = canSelfUpdate && updateZip != nil
-            ? "Click “Update to \(version)” next to the Quit button. Siesta downloads the new version, replaces itself and relaunches; macOS will not ask for approval again."
-            : "Click “Update to \(version)” next to the Quit button to open the release page."
+            ? "Click “Update to \(version)” at the top of the panel. Siesta downloads the new version, replaces itself and relaunches; macOS will not ask for approval again."
+            : "Click “Update to \(version)” at the top of the panel to open the release page."
         alert.addButton(withTitle: canSelfUpdate && updateZip != nil ? "Update now" : "Open release page")
         alert.addButton(withTitle: "Later")
         NSApp.activate(ignoringOtherApps: true)
@@ -1764,8 +1862,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     }
 
     func updateStatus(_ text: String) {
-        versionLink.attributedTitle = NSAttributedString(string: text, attributes: [
-            .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
+        updateChip.title = text
+        updateChip.busy = true
+        updateChip.toolTip = nil
     }
 
     func updateFailed(_ reason: String) {
@@ -1777,7 +1876,6 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     func performUpdate() {
         guard let zipURL = updateZip, let shaURL = updateSha, !updating else { return }
         updating = true
-        versionLink.isEnabled = false
         updateStatus("Updating…")
         log("Downloading Siesta \(updateVersion)")
         // 1) expected hash
