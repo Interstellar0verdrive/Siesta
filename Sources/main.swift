@@ -1122,7 +1122,8 @@ final class LinkButton: NSButton, HandCursorView {
 
 /// Small symbol button: secondary colour at rest, full label colour under the pointer, hand cursor.
 final class HoverIconButton: NSButton, HandCursorView {
-    var hovered = false { didSet { contentTintColor = hovered ? .labelColor : .secondaryLabelColor } }
+    var restColor: NSColor = .secondaryLabelColor { didSet { if !hovered { contentTintColor = restColor } } }
+    var hovered = false { didSet { contentTintColor = hovered ? .labelColor : restColor } }
     init(symbol: String, pointSize: CGFloat, label: String, weight: NSFont.Weight = .semibold) {
         super.init(frame: .zero)
         image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)?
@@ -1177,16 +1178,26 @@ final class UpdateChip: NSView, HandCursorView {
         get { label.stringValue }
         set { label.stringValue = newValue; setAccessibilityLabel(newValue) }
     }
+    /// Yellow so it stands out from the grey and blue panel: yellow text on a yellow tint in dark mode,
+    /// a yellow pill (75 %, full on hover) with near-black text in light mode, where yellow text would be unreadable.
+    static func isDark(_ a: NSAppearance) -> Bool { a.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
+    static let tint = NSColor(name: nil) { isDark($0) ? .systemYellow : NSColor(white: 0.1, alpha: 1) }
     private func restyle() {
-        let tint: NSColor = busy ? .secondaryLabelColor : .controlAccentColor
+        let tint: NSColor = busy ? .secondaryLabelColor : UpdateChip.tint
         label.textColor = tint; icon.contentTintColor = tint
         needsDisplay = true
         window?.invalidateCursorRects(for: self)
     }
     override var wantsUpdateLayer: Bool { true }
     override func updateLayer() {
-        let fill = busy ? NSColor.labelColor.withAlphaComponent(0.07)
-            : NSColor.controlAccentColor.withAlphaComponent(pressed ? 0.34 : hovered ? 0.26 : 0.16)
+        let level = pressed ? 2 : hovered ? 1 : 0
+        let fill: NSColor
+        if busy { fill = NSColor.labelColor.withAlphaComponent(0.07) }
+        else if UpdateChip.isDark(effectiveAppearance) { fill = NSColor.systemYellow.withAlphaComponent([0.16, 0.26, 0.34][level]) }
+        else {   // light: yellow at 75 %, full under the pointer, a touch darker while pressed
+            fill = level == 2 ? (NSColor.systemYellow.blended(withFraction: 0.08, of: .black) ?? .systemYellow)
+                : NSColor.systemYellow.withAlphaComponent(level == 1 ? 1 : 0.75)
+        }
         easeLayerColor(layer, "backgroundColor", to: fill.cgColor)
     }
     override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); needsDisplay = true }
@@ -1300,7 +1311,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     let detachCheckbox = StyledCheckbox(title: "Detached window")
     let logBox = LogBoxView()
     let versionLabel = NSTextField(labelWithString: "")
-    let aboutButton = HoverIconButton(symbol: "info.circle", pointSize: 13, label: "About Siesta", weight: .regular)
+    let aboutButton = HoverIconButton(symbol: "questionmark.circle", pointSize: 13, label: "About Siesta", weight: .regular)
     let updateChip = UpdateChip()
     var updateRow: NSView!
     var panelColumn: NSStackView!
@@ -1549,6 +1560,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         versionLabel.textColor = .tertiaryLabelColor
         versionLabel.stringValue = "v\(currentVersion)"
         versionLabel.setContentHuggingPriority(.required, for: .horizontal)
+        aboutButton.restColor = .tertiaryLabelColor   // same grey as the version beside it
         aboutButton.target = self; aboutButton.action = #selector(openAbout)
         aboutButton.setContentHuggingPriority(.required, for: .horizontal)
         let footer = NSStackView(views: [detachCheckbox, NSView(), versionLabel, aboutButton, quitButton])
