@@ -1418,9 +1418,6 @@ final class SegmentedPicker: NSView, HandCursorView {
     }
     required init?(coder: NSCoder) { fatalError() }
     override var allowsVibrancy: Bool { false }
-    /// In dark the chosen segment needs a clear step from the track: over the popover's translucent
-    /// material a 17 % white fill almost vanished, so it is 32 % and the other labels dim a little.
-    static let darkSelected: CGFloat = 0.32, darkUnselectedText: CGFloat = 0.72
     /// Each segment fits its widest weight, so the text never shifts when it becomes the chosen one.
     private var widths: [CGFloat] { items.map { ceil(NSAttributedString(string: $0, attributes: [.font: boldFont]).size().width) + 18 } }
     override var intrinsicContentSize: NSSize { NSSize(width: widths.reduce(0, +) + CGFloat(items.count - 1) + 2 * 2, height: 22) }
@@ -1451,15 +1448,17 @@ final class SegmentedPicker: NSView, HandCursorView {
         for (i, r) in segmentRects().enumerated() {
             let seg = NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4)
             if i == selected {
+                // the chosen segment in the accent colour, like the menu bar chips: a grey one was lost
+                // on the popover's translucent material in dark mode
                 NSGraphicsContext.saveGraphicsState()
                 let shadow = NSShadow(); shadow.shadowOffset = NSSize(width: 0, height: -0.5); shadow.shadowBlurRadius = 1.5
                 shadow.shadowColor = NSColor.black.withAlphaComponent(dark ? 0.3 : 0.18); shadow.set()
-                (dark ? NSColor.white.withAlphaComponent(SegmentedPicker.darkSelected) : .white).setFill(); seg.fill()
+                NSColor.controlAccentColor.setFill(); seg.fill()
                 NSGraphicsContext.restoreGraphicsState()
             } else if i == hovered {
                 NSColor.labelColor.withAlphaComponent(0.05).setFill(); seg.fill()
             }
-            let color: NSColor = dark && i != selected ? NSColor(white: 1, alpha: SegmentedPicker.darkUnselectedText) : .labelColor
+            let color: NSColor = i == selected ? .white : .labelColor
             let text = NSAttributedString(string: items[i], attributes: [.font: i == selected ? boldFont : font, .foregroundColor: color])
             let size = text.size()
             text.draw(at: NSPoint(x: r.midX - size.width / 2, y: r.midY - size.height / 2))
@@ -2614,48 +2613,78 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     }
 
     /// What the menu bar shows next to the cat: the countdown, then CPU and temperature as columns.
-    func menuBarParts(time: String) -> (time: String?, columns: [(caption: String, value: String, widest: String)]) {
+    func menuBarParts(time: String) -> (time: String?, columns: [(caption: String, value: String)]) {
         let items = menuBarItems
-        var columns: [(String, String, String)] = []
-        if items.contains("cpu"), let r = latestReading { columns.append(("CPU", "\(Int(r.cpu.rounded()))%", "88%")) }
-        if items.contains("temp"), let t = latestReading?.temp { columns.append(("TEMP", "\(Int(t.rounded()))°", "88°")) }
+        var columns: [(String, String)] = []
+        if items.contains("cpu"), let r = latestReading { columns.append(("CPU", "\(Int(r.cpu.rounded()))%")) }
+        if items.contains("temp"), let t = latestReading?.temp { columns.append(("TEMP", "\(Int(t.rounded()))°")) }
         return (items.contains("time") && !time.isEmpty ? time : nil, columns)
     }
 
     // The menu bar item is one template image, so macOS tints it like any menu bar icon: the cat,
-    // the countdown in the menu bar font, then each reading as Stats shows it — a small caption
-    // over the value, left aligned, in a column as wide as two digits, so the item keeps its width (only 100 widens it).
+    // the countdown in the menu bar font, then each reading as Stats shows it — a small caption over
+    // the value, left aligned. Every gap is measured on the ink, not on the boxes: the same space
+    // after the cat and between the items, and after the last one the same margin the cat has on its left.
+    // Each column is as wide as what it shows (digits are monospaced, so it only changes at 10 and 100).
     static let menuBarHeight: CGFloat = 22, catSize: CGFloat = 20
-    // the small captions look closer to the cat than the countdown does, so a column that comes first gets one point more
-    static let catToText: CGFloat = 4, catToColumn: CGFloat = 5, itemGap: CGFloat = 8, columnGap: CGFloat = 4
-    static func menuBarImage(state: String, description: String, time: String?, columns: [(caption: String, value: String, widest: String)]) -> NSImage? {
+    static let menuBarGap: CGFloat = 7
+    /// Horizontal ink of a line of text, from its drawing origin.
+    static func inkX(_ a: NSAttributedString) -> (min: CGFloat, max: CGFloat) {
+        let b = CTLineGetBoundsWithOptions(CTLineCreateWithAttributedString(a), .useGlyphPathBounds)
+        return (b.minX, b.maxX)
+    }
+    /// Left and right edge of the cat's ink in its 20 pt box, read from the pixels once per state.
+    static var catInkCache: [String: (min: CGFloat, max: CGFloat)] = [:]
+    static func catInk(_ state: String, _ cat: NSImage) -> (min: CGFloat, max: CGFloat) {
+        if let c = catInkCache[state] { return c }
+        let scale = 4, side = Int(catSize) * scale
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: side, pixelsHigh: side, bitsPerSample: 8, samplesPerPixel: 4,
+                                         hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return (0, catSize) }
+        rep.size = NSSize(width: catSize, height: catSize)
+        NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        cat.draw(in: NSRect(x: 0, y: 0, width: catSize, height: catSize))
+        NSGraphicsContext.restoreGraphicsState()
+        var lo = side, hi = -1
+        for x in 0..<side { for y in 0..<side where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.5 { lo = min(lo, x); hi = max(hi, x); break } }
+        let ink = hi < 0 ? (0, catSize) : (CGFloat(lo) / CGFloat(scale), CGFloat(hi + 1) / CGFloat(scale))
+        catInkCache[state] = ink
+        return ink
+    }
+    static func menuBarImage(state: String, description: String, time: String?, columns: [(caption: String, value: String)]) -> NSImage? {
         guard let cat = stateIcon(state, panel: false, description: description) else { return nil }
         if time == nil && columns.isEmpty { return cat }
         let timeFont = NSFont.monospacedDigitSystemFont(ofSize: NSFont.menuBarFont(ofSize: 0).pointSize, weight: .regular)
         let captionFont = NSFont.systemFont(ofSize: 7.5, weight: .semibold)
         let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
         func attr(_ s: String, _ f: NSFont) -> NSAttributedString { NSAttributedString(string: s, attributes: [.font: f, .foregroundColor: NSColor.black]) }
-        let timeText = time.map { attr($0, timeFont) }
-        let widths = columns.map { c in ceil(max(attr(c.caption, captionFont).size().width, attr(c.widest, valueFont).size().width)) }
-        let lead = catSize + (timeText == nil ? catToColumn : catToText)
-        var width = lead
-        if let t = timeText { width += ceil(t.size().width) }
-        if !columns.isEmpty { width += (timeText == nil ? 0 : itemGap) + widths.reduce(0, +) + columnGap * CGFloat(columns.count - 1) }
         let h = menuBarHeight
-        // draws a string with its baseline at `baseline` (unflipped: draw(at:) puts the line's bottom, the descender, at y)
-        func draw(_ a: NSAttributedString, x: CGFloat, baseline: CGFloat, font: NSFont) { a.draw(at: NSPoint(x: x, y: baseline + font.descender)) }
-        let image = NSImage(size: NSSize(width: ceil(width), height: h), flipped: false) { _ in
+        // each item: its strings with their baselines, and the ink edges of the whole item from its origin
+        typealias Line = (text: NSAttributedString, font: NSFont, baseline: CGFloat)
+        var items: [(lines: [Line], ink: (min: CGFloat, max: CGFloat))] = []
+        if let t = time {
+            let a = attr(t, timeFont)
+            // capitals centred on the bar, like the system's own menu bar text
+            items.append(([(a, timeFont, ((h - timeFont.capHeight) / 2).rounded())], inkX(a)))
+        }
+        for c in columns {
+            let v = attr(c.value, valueFont), k = attr(c.caption, captionFont)
+            let iv = inkX(v), ik = inkX(k)
+            items.append(([(v, valueFont, 3), (k, captionFont, 14)], (min(iv.min, ik.min), max(iv.max, ik.max))))
+        }
+        let catInk = catInk(state, cat)
+        var cursor = catInk.max   // right edge of the ink so far
+        var origins: [CGFloat] = []
+        for item in items {
+            let x = cursor + menuBarGap - item.ink.min
+            origins.append(x)
+            cursor = x + item.ink.max
+        }
+        let width = ceil(cursor + catInk.min)
+        let image = NSImage(size: NSSize(width: width, height: h), flipped: false) { _ in
             cat.draw(in: NSRect(x: 0, y: (h - catSize) / 2, width: catSize, height: catSize))
-            var x = lead
-            if let t = timeText {
-                // capitals centred on the bar, like the system's own menu bar text
-                draw(t, x: x, baseline: ((h - timeFont.capHeight) / 2).rounded(), font: timeFont)
-                x += ceil(t.size().width) + itemGap
-            }
-            for (i, c) in columns.enumerated() {
-                draw(attr(c.value, valueFont), x: x, baseline: 3, font: valueFont)
-                draw(attr(c.caption, captionFont), x: x, baseline: 14, font: captionFont)
-                x += widths[i] + columnGap
+            for (item, x) in zip(items, origins) {
+                // draw(at:) puts the line's bottom, the descender, at y
+                for l in item.lines { l.text.draw(at: NSPoint(x: x, y: l.baseline + l.font.descender)) }
             }
             return true
         }
@@ -3194,8 +3223,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 if CommandLine.arguments.contains("--debug-sensors") { TemperatureReader.dump(); exit(0) }
 if let i = CommandLine.arguments.firstIndex(of: "--debug-menubar"), i + 1 < CommandLine.arguments.count {
     // the menu bar item for a few combinations, white on a dark bar and black on a light one, at 4x, into one PNG
-    let rows: [(String?, [(caption: String, value: String, widest: String)])] = [
-        ("12m", []), ("12m", [("CPU", "83%", "88%"), ("TEMP", "99°", "88°")]), (nil, [("CPU", "0%", "88%"), ("TEMP", "44°", "88°")]), (nil, [("CPU", "11%", "88%")])]
+    let rows: [(String?, [(caption: String, value: String)])] = [
+        ("12m", []), ("12m", [("CPU", "83%"), ("TEMP", "99°")]), (nil, [("CPU", "0%"), ("TEMP", "44°")]), (nil, [("CPU", "0%")]), (nil, [("TEMP", "50°")]), ("4m", [("CPU", "100%")])]
     let scale: CGFloat = 4, rowH: CGFloat = 30, w: CGFloat = 170
     let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(w * 2 * scale), pixelsHigh: Int(rowH * CGFloat(rows.count) * scale), bitsPerSample: 8,
                                samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
