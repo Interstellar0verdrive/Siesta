@@ -911,7 +911,6 @@ final class LogBoxView: NSView {
     let count = NSTextField(labelWithString: "")
     let dot = NSTextField(labelWithString: "·")
     let clear = LinkButton(title: "Clear", target: nil, action: nil)
-    let clearPill = PillView()
     let scroll = NSScrollView()
     let list = LogTextView()
     var onToggle: (() -> Void)?
@@ -945,23 +944,7 @@ final class LogBoxView: NSView {
         row.orientation = .horizontal; row.alignment = .centerY; row.spacing = 10
         row.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
         row.translatesAutoresizingMaskIntoConstraints = false
-        // under the pointer "Clear" also sits on a small pill: brighter text alone was easy to miss
-        clearPill.translatesAutoresizingMaskIntoConstraints = false
-        clearPill.alphaValue = 0
-        header.addSubview(clearPill)
         header.addSubview(row)
-        NSLayoutConstraint.activate([
-            clearPill.leadingAnchor.constraint(equalTo: clear.leadingAnchor, constant: -5),
-            clearPill.trailingAnchor.constraint(equalTo: clear.trailingAnchor, constant: 5),
-            clearPill.centerYAnchor.constraint(equalTo: clear.centerYAnchor),
-            clearPill.heightAnchor.constraint(equalToConstant: 20),
-        ])
-        clear.onHover = { [weak self] on in
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.15
-                self?.clearPill.animator().alphaValue = on ? 1 : 0
-            }
-        }
         header.onClick = { [weak self] in self?.onToggle?() }
         NSLayoutConstraint.activate([
             row.leadingAnchor.constraint(equalTo: header.leadingAnchor), row.trailingAnchor.constraint(equalTo: header.trailingAnchor),
@@ -1167,8 +1150,7 @@ final class LinkButton: NSButton, HandCursorView {
     var text = "" { didSet { restyle() } }
     var restColor: NSColor = .secondaryLabelColor { didSet { restyle() } }
     var hoverColor: NSColor = .labelColor { didSet { restyle() } }
-    var onHover: ((Bool) -> Void)?
-    private var hovered = false { didSet { restyle(); if hovered != oldValue { onHover?(hovered) } } }
+    private var hovered = false { didSet { restyle() } }
     private func restyle() {
         attributedTitle = NSAttributedString(string: text, attributes: [
             .font: NSFont.systemFont(ofSize: 11),
@@ -1209,6 +1191,8 @@ final class HoverIconButton: NSButton, HandCursorView {
     override func mouseExited(with event: NSEvent) { hovered = false }
     override func resetCursorRects() { if isEnabled { addCursorRect(bounds, cursor: .pointingHand) } }
     func wantsHandCursor(at point: NSPoint) -> Bool { isEnabled && !isHidden && alphaValue > 0 }
+    // clicked away with its page (the gear opens the settings): no mouseExited comes, so forget the hover
+    override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); if window == nil { hovered = false } }
 }
 
 /// Pill shown above the status only while a new version is available: accent tint, hand cursor,
@@ -1434,6 +1418,9 @@ final class SegmentedPicker: NSView, HandCursorView {
     }
     required init?(coder: NSCoder) { fatalError() }
     override var allowsVibrancy: Bool { false }
+    /// In dark the chosen segment needs a clear step from the track: over the popover's translucent
+    /// material a 17 % white fill almost vanished, so it is 32 % and the other labels dim a little.
+    static let darkSelected: CGFloat = 0.32, darkUnselectedText: CGFloat = 0.72
     /// Each segment fits its widest weight, so the text never shifts when it becomes the chosen one.
     private var widths: [CGFloat] { items.map { ceil(NSAttributedString(string: $0, attributes: [.font: boldFont]).size().width) + 18 } }
     override var intrinsicContentSize: NSSize { NSSize(width: widths.reduce(0, +) + CGFloat(items.count - 1) + 2 * 2, height: 22) }
@@ -1467,12 +1454,13 @@ final class SegmentedPicker: NSView, HandCursorView {
                 NSGraphicsContext.saveGraphicsState()
                 let shadow = NSShadow(); shadow.shadowOffset = NSSize(width: 0, height: -0.5); shadow.shadowBlurRadius = 1.5
                 shadow.shadowColor = NSColor.black.withAlphaComponent(dark ? 0.3 : 0.18); shadow.set()
-                (dark ? NSColor.white.withAlphaComponent(0.17) : .white).setFill(); seg.fill()
+                (dark ? NSColor.white.withAlphaComponent(SegmentedPicker.darkSelected) : .white).setFill(); seg.fill()
                 NSGraphicsContext.restoreGraphicsState()
             } else if i == hovered {
                 NSColor.labelColor.withAlphaComponent(0.05).setFill(); seg.fill()
             }
-            let text = NSAttributedString(string: items[i], attributes: [.font: i == selected ? boldFont : font, .foregroundColor: NSColor.labelColor])
+            let color: NSColor = dark && i != selected ? NSColor(white: 1, alpha: SegmentedPicker.darkUnselectedText) : .labelColor
+            let text = NSAttributedString(string: items[i], attributes: [.font: i == selected ? boldFont : font, .foregroundColor: color])
             let size = text.size()
             text.draw(at: NSPoint(x: r.midX - size.width / 2, y: r.midY - size.height / 2))
         }
@@ -1527,15 +1515,6 @@ final class ChipToggle: NSView, HandCursorView {
     override func mouseExited(with event: NSEvent) { hovered = false }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
     func wantsHandCursor(at point: NSPoint) -> Bool { true }
-}
-
-/// Rounded fill behind a text link under the pointer.
-final class PillView: NSView {
-    override init(frame: NSRect) { super.init(frame: frame); wantsLayer = true; layer?.cornerRadius = 5 }
-    required init?(coder: NSCoder) { fatalError() }
-    override var wantsUpdateLayer: Bool { true }
-    override func updateLayer() { layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.12).cgColor }
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 /// One-point line between the rows of a settings group.
@@ -1669,6 +1648,7 @@ final class BackButton: NSView, HandCursorView {
     override func mouseEntered(with event: NSEvent) { hovered = true }
     override func mouseExited(with event: NSEvent) { hovered = false }
     override func viewDidHide() { super.viewDidHide(); hovered = false }
+    override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); if window == nil { hovered = false } }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
     func wantsHandCursor(at point: NSPoint) -> Bool { true }
     /// `--debug-scene settings` shows the pointer on it, as on the board.
@@ -2646,7 +2626,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     // the countdown in the menu bar font, then each reading as Stats shows it — a small caption
     // over the value, left aligned, in a column as wide as two digits, so the item keeps its width (only 100 widens it).
     static let menuBarHeight: CGFloat = 22, catSize: CGFloat = 20
-    static let catToText: CGFloat = 4, itemGap: CGFloat = 8
+    // the small captions look closer to the cat than the countdown does, so a column that comes first gets one point more
+    static let catToText: CGFloat = 4, catToColumn: CGFloat = 5, itemGap: CGFloat = 8, columnGap: CGFloat = 4
     static func menuBarImage(state: String, description: String, time: String?, columns: [(caption: String, value: String, widest: String)]) -> NSImage? {
         guard let cat = stateIcon(state, panel: false, description: description) else { return nil }
         if time == nil && columns.isEmpty { return cat }
@@ -2656,15 +2637,16 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         func attr(_ s: String, _ f: NSFont) -> NSAttributedString { NSAttributedString(string: s, attributes: [.font: f, .foregroundColor: NSColor.black]) }
         let timeText = time.map { attr($0, timeFont) }
         let widths = columns.map { c in ceil(max(attr(c.caption, captionFont).size().width, attr(c.widest, valueFont).size().width)) }
-        var width = catSize + catToText
+        let lead = catSize + (timeText == nil ? catToColumn : catToText)
+        var width = lead
         if let t = timeText { width += ceil(t.size().width) }
-        if !columns.isEmpty { width += (timeText == nil ? 0 : itemGap) + widths.reduce(0, +) + itemGap * CGFloat(columns.count - 1) }
+        if !columns.isEmpty { width += (timeText == nil ? 0 : itemGap) + widths.reduce(0, +) + columnGap * CGFloat(columns.count - 1) }
         let h = menuBarHeight
         // draws a string with its baseline at `baseline` (unflipped: draw(at:) puts the line's bottom, the descender, at y)
         func draw(_ a: NSAttributedString, x: CGFloat, baseline: CGFloat, font: NSFont) { a.draw(at: NSPoint(x: x, y: baseline + font.descender)) }
         let image = NSImage(size: NSSize(width: ceil(width), height: h), flipped: false) { _ in
             cat.draw(in: NSRect(x: 0, y: (h - catSize) / 2, width: catSize, height: catSize))
-            var x = catSize + catToText
+            var x = lead
             if let t = timeText {
                 // capitals centred on the bar, like the system's own menu bar text
                 draw(t, x: x, baseline: ((h - timeFont.capHeight) / 2).rounded(), font: timeFont)
@@ -2673,7 +2655,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             for (i, c) in columns.enumerated() {
                 draw(attr(c.value, valueFont), x: x, baseline: 3, font: valueFont)
                 draw(attr(c.caption, captionFont), x: x, baseline: 14, font: captionFont)
-                x += widths[i] + itemGap
+                x += widths[i] + columnGap
             }
             return true
         }
