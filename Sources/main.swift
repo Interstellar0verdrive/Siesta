@@ -911,6 +911,7 @@ final class LogBoxView: NSView {
     let count = NSTextField(labelWithString: "")
     let dot = NSTextField(labelWithString: "·")
     let clear = LinkButton(title: "Clear", target: nil, action: nil)
+    let clearPill = PillView()
     let scroll = NSScrollView()
     let list = LogTextView()
     var onToggle: (() -> Void)?
@@ -944,7 +945,23 @@ final class LogBoxView: NSView {
         row.orientation = .horizontal; row.alignment = .centerY; row.spacing = 10
         row.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
         row.translatesAutoresizingMaskIntoConstraints = false
+        // under the pointer "Clear" also sits on a small pill: brighter text alone was easy to miss
+        clearPill.translatesAutoresizingMaskIntoConstraints = false
+        clearPill.alphaValue = 0
+        header.addSubview(clearPill)
         header.addSubview(row)
+        NSLayoutConstraint.activate([
+            clearPill.leadingAnchor.constraint(equalTo: clear.leadingAnchor, constant: -5),
+            clearPill.trailingAnchor.constraint(equalTo: clear.trailingAnchor, constant: 5),
+            clearPill.centerYAnchor.constraint(equalTo: clear.centerYAnchor),
+            clearPill.heightAnchor.constraint(equalToConstant: 20),
+        ])
+        clear.onHover = { [weak self] on in
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.15
+                self?.clearPill.animator().alphaValue = on ? 1 : 0
+            }
+        }
         header.onClick = { [weak self] in self?.onToggle?() }
         NSLayoutConstraint.activate([
             row.leadingAnchor.constraint(equalTo: header.leadingAnchor), row.trailingAnchor.constraint(equalTo: header.trailingAnchor),
@@ -1150,7 +1167,8 @@ final class LinkButton: NSButton, HandCursorView {
     var text = "" { didSet { restyle() } }
     var restColor: NSColor = .secondaryLabelColor { didSet { restyle() } }
     var hoverColor: NSColor = .labelColor { didSet { restyle() } }
-    private var hovered = false { didSet { restyle() } }
+    var onHover: ((Bool) -> Void)?
+    private var hovered = false { didSet { restyle(); if hovered != oldValue { onHover?(hovered) } } }
     private func restyle() {
         attributedTitle = NSAttributedString(string: text, attributes: [
             .font: NSFont.systemFont(ofSize: 11),
@@ -1511,6 +1529,15 @@ final class ChipToggle: NSView, HandCursorView {
     func wantsHandCursor(at point: NSPoint) -> Bool { true }
 }
 
+/// Rounded fill behind a text link under the pointer.
+final class PillView: NSView {
+    override init(frame: NSRect) { super.init(frame: frame); wantsLayer = true; layer?.cornerRadius = 5 }
+    required init?(coder: NSCoder) { fatalError() }
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() { layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.12).cgColor }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 /// One-point line between the rows of a settings group.
 final class HairlineView: NSView {
     init() {
@@ -1799,11 +1826,12 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.target = self
         statusItem.button?.action = #selector(statusItemClicked)
-        statusItem.button?.imagePosition = .imageLeft
-        statusItem.button?.imageHugsTitle = true
-        // figures of one width: CPU and temperature change every few seconds without the item jumping
-        statusItem.button?.font = .monospacedDigitSystemFont(ofSize: NSFont.menuBarFont(ofSize: 0).pointSize, weight: .regular)
+        statusItem.button?.imagePosition = .imageOnly   // the countdown and the readings are drawn into the image
         applyAppearance()
+        // with "System", follow the Mac switching between light and dark
+        appearanceObservation = NSApp.observe(\.effectiveAppearance) { [weak self] _, _ in
+            DispatchQueue.main.async { self?.syncPopoverAppearance() }
+        }
         buildPanel()
         chart.smoothCurves = flag("smoothCurves", true)
         chart.magneticBands = flag("magneticBands", true)
@@ -2272,9 +2300,10 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     /// whatever the countdown next to it says.
     func iconAnchor() -> NSRect {
         guard let button = statusItem.button else { return .zero }
-        guard let image = button.image, !button.title.isEmpty else { return button.bounds }
-        let inset = (button.bounds.width - image.size.width - button.attributedTitle.size().width) / 2
-        return NSRect(x: 0, y: 0, width: image.size.width + 2 * max(0, inset), height: button.bounds.height)
+        guard let image = button.image, image.size.width > App.catSize + 1 else { return button.bounds }
+        // the image is centred in the button: a rect from the left edge, symmetric about the cat's centre
+        let catCentre = (button.bounds.width - image.size.width) / 2 + App.catSize / 2
+        return NSRect(x: 0, y: 0, width: 2 * catCentre, height: button.bounds.height)
     }
 
     // MARK: Smooth popover follow
@@ -2513,7 +2542,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             text = last.result == "failed" ? "Could not check at \(f.string(from: last.date))" : "Up to date · checked at \(f.string(from: last.date))"
         } else { text = flag("checkUpdates", true) ? "Not checked yet" : "Automatic checks off" }
         row.detail.stringValue = text
-        checkNowButton.isEnabled = !checking && !updating
+        // not isEnabled: a disabled NSButton redraws its title in the wrong appearance for a moment (black on dark)
+        checkNowButton.alphaValue = checking || updating ? 0.5 : 1
     }
 
     @objc func openSettings() { showSettings(true) }
@@ -2577,8 +2607,18 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let choice: NSAppearance? = appearanceChoice == "light" ? NSAppearance(named: .aqua)
             : appearanceChoice == "dark" ? NSAppearance(named: .darkAqua) : nil
         NSApp.appearance = choice
-        popover.appearance = choice
+        syncPopoverAppearance()
     }
+
+    /// The popover always gets a concrete appearance, also with "System": left to itself it turns
+    /// vibrant, and vibrancy blends the text into the background, so the greys flatten out (hover
+    /// states, group captions, the chosen segment). This way it looks like the renders and the window.
+    func syncPopoverAppearance() {
+        let dark = (NSApp.appearance ?? NSApp.effectiveAppearance).bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let wanted = NSAppearance(named: dark ? .darkAqua : .aqua)
+        if popover.appearance?.name != wanted?.name { popover.appearance = wanted }
+    }
+    var appearanceObservation: NSKeyValueObservation?
 
     func setOpenAtLogin(_ on: Bool) {
         guard App.scene == nil else { return }
@@ -2593,14 +2633,53 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         if service.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
     }
 
-    /// What the menu bar shows next to the cat: the chosen items in a fixed order, two spaces apart.
-    func menuBarText(time: String) -> String {
+    /// What the menu bar shows next to the cat: the countdown, then CPU and temperature as columns.
+    func menuBarParts(time: String) -> (time: String?, columns: [(caption: String, value: String, widest: String)]) {
         let items = menuBarItems
-        var parts: [String] = []
-        if items.contains("time"), !time.isEmpty { parts.append(time) }
-        if items.contains("cpu"), let r = latestReading { parts.append("\(Int(r.cpu.rounded()))%") }
-        if items.contains("temp"), let t = latestReading?.temp { parts.append("\(Int(t.rounded()))°") }
-        return parts.joined(separator: "  ")
+        var columns: [(String, String, String)] = []
+        if items.contains("cpu"), let r = latestReading { columns.append(("CPU", "\(Int(r.cpu.rounded()))%", "88%")) }
+        if items.contains("temp"), let t = latestReading?.temp { columns.append(("TEMP", "\(Int(t.rounded()))°", "88°")) }
+        return (items.contains("time") && !time.isEmpty ? time : nil, columns)
+    }
+
+    // The menu bar item is one template image, so macOS tints it like any menu bar icon: the cat,
+    // the countdown in the menu bar font, then each reading as Stats shows it — a small caption
+    // over the value, left aligned, in a column as wide as two digits, so the item keeps its width (only 100 widens it).
+    static let menuBarHeight: CGFloat = 22, catSize: CGFloat = 20
+    static let catToText: CGFloat = 4, itemGap: CGFloat = 8
+    static func menuBarImage(state: String, description: String, time: String?, columns: [(caption: String, value: String, widest: String)]) -> NSImage? {
+        guard let cat = stateIcon(state, panel: false, description: description) else { return nil }
+        if time == nil && columns.isEmpty { return cat }
+        let timeFont = NSFont.monospacedDigitSystemFont(ofSize: NSFont.menuBarFont(ofSize: 0).pointSize, weight: .regular)
+        let captionFont = NSFont.systemFont(ofSize: 7.5, weight: .semibold)
+        let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        func attr(_ s: String, _ f: NSFont) -> NSAttributedString { NSAttributedString(string: s, attributes: [.font: f, .foregroundColor: NSColor.black]) }
+        let timeText = time.map { attr($0, timeFont) }
+        let widths = columns.map { c in ceil(max(attr(c.caption, captionFont).size().width, attr(c.widest, valueFont).size().width)) }
+        var width = catSize + catToText
+        if let t = timeText { width += ceil(t.size().width) }
+        if !columns.isEmpty { width += (timeText == nil ? 0 : itemGap) + widths.reduce(0, +) + itemGap * CGFloat(columns.count - 1) }
+        let h = menuBarHeight
+        // draws a string with its baseline at `baseline` (unflipped: draw(at:) puts the line's bottom, the descender, at y)
+        func draw(_ a: NSAttributedString, x: CGFloat, baseline: CGFloat, font: NSFont) { a.draw(at: NSPoint(x: x, y: baseline + font.descender)) }
+        let image = NSImage(size: NSSize(width: ceil(width), height: h), flipped: false) { _ in
+            cat.draw(in: NSRect(x: 0, y: (h - catSize) / 2, width: catSize, height: catSize))
+            var x = catSize + catToText
+            if let t = timeText {
+                // capitals centred on the bar, like the system's own menu bar text
+                draw(t, x: x, baseline: ((h - timeFont.capHeight) / 2).rounded(), font: timeFont)
+                x += ceil(t.size().width) + itemGap
+            }
+            for (i, c) in columns.enumerated() {
+                draw(attr(c.value, valueFont), x: x, baseline: 3, font: valueFont)
+                draw(attr(c.caption, captionFont), x: x, baseline: 14, font: captionFont)
+                x += widths[i] + itemGap
+            }
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = ([description] + [time].compactMap { $0 } + columns.map { "\($0.caption) \($0.value)" }).joined(separator: ", ")
+        return image
     }
 
     func appendToLogFile(_ s: String) {
@@ -3069,8 +3148,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         statusTitle.stringValue = title
         statusSubtitle.stringValue = subtitle
         countdown.stringValue = count
-        statusItem.button?.image = App.stateIcon(state, panel: false, description: description)
-        statusItem.button?.title = menuBarText(time: barTitle)
+        let parts = menuBarParts(time: barTitle)
+        statusItem.button?.image = App.menuBarImage(state: state, description: description, time: parts.time, columns: parts.columns)
+        statusItem.button?.title = ""
         statusItem.button?.toolTip = "Siesta — " + tooltip
         if popover.isShown {
             // the button may have changed width: re-centre the arrow after layout
@@ -3130,6 +3210,29 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 }
 
 if CommandLine.arguments.contains("--debug-sensors") { TemperatureReader.dump(); exit(0) }
+if let i = CommandLine.arguments.firstIndex(of: "--debug-menubar"), i + 1 < CommandLine.arguments.count {
+    // the menu bar item for a few combinations, white on a dark bar and black on a light one, at 4x, into one PNG
+    let rows: [(String?, [(caption: String, value: String, widest: String)])] = [
+        ("12m", []), ("12m", [("CPU", "83%", "88%"), ("TEMP", "99°", "88°")]), (nil, [("CPU", "0%", "88%"), ("TEMP", "44°", "88°")]), (nil, [("CPU", "11%", "88%")])]
+    let scale: CGFloat = 4, rowH: CGFloat = 30, w: CGFloat = 170
+    let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(w * 2 * scale), pixelsHigh: Int(rowH * CGFloat(rows.count) * scale), bitsPerSample: 8,
+                               samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+    rep.size = NSSize(width: w * 2, height: rowH * CGFloat(rows.count))
+    NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+    for (k, dark) in [true, false].enumerated() {
+        (dark ? NSColor(white: 0.16, alpha: 1) : NSColor(white: 0.92, alpha: 1)).setFill()
+        NSRect(x: CGFloat(k) * w, y: 0, width: w, height: rowH * CGFloat(rows.count)).fill()
+        for (j, r) in rows.enumerated() {
+            guard let img = App.menuBarImage(state: "working", description: "Working", time: r.0, columns: r.1) else { continue }
+            let y = rowH * CGFloat(rows.count - 1 - j) + (rowH - App.menuBarHeight) / 2
+            let tinted = NSImage(size: img.size, flipped: false) { rect in img.draw(in: rect); (dark ? NSColor.white : NSColor.black).set(); rect.fill(using: .sourceAtop); return true }
+            tinted.draw(in: NSRect(x: CGFloat(k) * w + 10, y: y, width: img.size.width, height: img.size.height))
+        }
+    }
+    NSGraphicsContext.restoreGraphicsState()
+    try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: CommandLine.arguments[i + 1]))
+    exit(0)
+}
 if let i = CommandLine.arguments.firstIndex(of: "--debug-chart"), i + 1 < CommandLine.arguments.count {
     // renders the chart off screen on 6 hours of synthetic data (15 min work, 1 min rest), at several
     // zoom levels, straight lines on the left and smooth curves on the right, into one PNG
