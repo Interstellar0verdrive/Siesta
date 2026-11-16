@@ -382,6 +382,8 @@ final class ChartView: NSView, HandCursorView {
     /// Idle time cut out of the chart is marked by a strip this wide: 1 pt margin, a dotted line,
     /// 6 pt of empty space, a dotted line, 1 pt margin.
     static let seamStrip: CGFloat = 10
+    /// Set while "Hold the chart while idle" holds an idle stretch long enough to be cut out.
+    var holding = false { didSet { if holding != oldValue { needsDisplay = true } } }
     /// The strips drawn last: the time of the first sample after each cut and the strip's left edge.
     private var strips: [(cut: TimeInterval, x0: CGFloat)] = []
     /// The time under a point of the plot, stepping over the strips (inside one: the sample after the cut).
@@ -678,7 +680,11 @@ final class ChartView: NSView, HandCursorView {
         geom = (plotLeft, plotRight, tStart, w, plotsBottom, plotsTop)
         // where idle time was cut out, an empty strip is inserted between the samples either side:
         // everything after it moves right by the strip's width, so the strip never covers any data
-        let cuts = samples.filter { $0.cut && $0.t > tStart && $0.t <= tEnd }.map { $0.t }
+        var cuts = samples.filter { $0.cut && $0.t > tStart && $0.t <= tEnd }.map { $0.t }
+        // held right now: the strip of the stretch being cut out already stands after the last sample,
+        // where it will stay when work comes back (nothing moves then)
+        let pending = holding && last.t >= tStart && last.t <= tEnd + 0.5
+        if pending { cuts.append(last.t + 0.001) }
         let strip = ChartView.seamStrip
         let dataW = plotW - CGFloat(cuts.count) * strip
         func x(_ t: TimeInterval) -> CGFloat {
@@ -772,8 +778,10 @@ final class ChartView: NSView, HandCursorView {
         }
         // now line + end dots
         let nowVisible = last.t <= tEnd + 0.5
+        // while held the last sample is not "now": no now line, no end dots, its time instead of "Now"
+        let live = nowVisible && !pending
         let nx = x(last.t)
-        if nowVisible {
+        if live {
             let now = NSBezierPath(); now.move(to: NSPoint(x: nx, y: plotsBottom)); now.line(to: NSPoint(x: nx, y: plotsTop))
             now.setLineDash([3, 3], count: 2, phase: 0); now.lineWidth = 1; NSColor.labelColor.withAlphaComponent(0.45).setStroke(); now.stroke()
         }
@@ -795,7 +803,7 @@ final class ChartView: NSView, HandCursorView {
             let py = lane.minY + CGFloat((v - minV) / max(1, maxV - minV)) * lane.height
             color.setFill(); NSBezierPath(ovalIn: NSRect(x: nx - 3, y: min(lane.maxY, max(lane.minY, py)) - 3, width: 6, height: 6)).fill()
         }
-        if nowVisible {
+        if live {
             dot(last.cpu, lane: cpuLane, maxV: cpuMax, minV: 0, cpuColor)
             if let t = last.temp { dot(t, lane: tempLane, maxV: tMax, minV: tMin, tempColor) }
         }
@@ -826,7 +834,7 @@ final class ChartView: NSView, HandCursorView {
         let f = DateFormatter(); f.dateFormat = w < 120 ? "HH:mm:ss" : "HH:mm"
         let hx: CGFloat? = hover.map { x($0.t) }
         // the right-hand label ("Now", or the time at the right edge) is drawn right aligned 14 pt past its anchor
-        let rightText = nowVisible ? "Now" : f.string(from: Date(timeIntervalSinceReferenceDate: clock(at: tEnd)))
+        let rightText = live ? "Now" : f.string(from: Date(timeIntervalSinceReferenceDate: pending ? last.clock : clock(at: tEnd)))
         let rightLeftEdge = (nowVisible ? nx : plotRight) + 14
             - NSAttributedString(string: rightText, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)]).size().width
         var previous = ""
@@ -3103,6 +3111,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         // Working means busy now, whether or not a cycle runs (Start automatically waits a few seconds).
         let working = phase == .resting || (phase == .working && isEncoding) || rawCpu >= threshold
         if flag("holdChart", false) && !working {
+            if let lastT = chart.samples.last?.t, chartNow - lastT > every + 5 { chart.holding = true }
             if debugSamples { debugPrint(String(format: "HELD cpu %.1f%% (raw %.0f, threshold %.0f)  phase %@", cpu, rawCpu, threshold, "\(phase)")) }
             holding = true; return
         }
@@ -3115,6 +3124,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                 cut = true
             }
         }
+        chart.holding = false
         chart.samples.append(Sample(t: t - heldTime, cpu: cpu, temp: temp, resting: phase == .resting, clock: t, cut: cut))
         if debugSamples, let s = chart.samples.last {
             debugPrint(String(format: "SAMPLE cpu %.1f%% of the Mac (%.0f%% of one core)  temp %@  %@  phase %@  n %d  held %.0f s%@", s.cpu, s.cpu * coreCount,
@@ -3434,12 +3444,13 @@ if let i = CommandLine.arguments.firstIndex(of: "--debug-hold"), i + 1 < Command
     var samples: [Sample] = []
     for k in 0...105 { let t = t0 + Double(k); samples.append(Sample(t: t, cpu: 3, temp: 62 + 8 * sin(Double(k) / 7), resting: false)) }
     let held = 140.0
-    // `fresh`: work has only just come back (two seconds after the cut)
-    for k in 106...(CommandLine.arguments.contains("fresh") ? 107 : 130) {
+    // `fresh`: work has only just come back (two seconds after the cut); `held`: still idle, nothing after it
+    for k in 106...(CommandLine.arguments.contains("fresh") ? 107 : 130) where !CommandLine.arguments.contains("held") {
         samples.append(Sample(t: t0 + Double(k), cpu: 40 + Double(k - 106), temp: 90 + Double(k - 106) * 0.7, resting: false, clock: t0 + Double(k) + held, cut: k == 106)) }
     let chart = ChartView()
     chart.frame = NSRect(x: 0, y: 0, width: 380, height: chart.fullHeight)
     chart.samples = samples
+    chart.holding = CommandLine.arguments.contains("held")
     let light = CommandLine.arguments.contains("light")
     let appearance = NSAppearance(named: light ? .aqua : .darkAqua)!
     let host = NSWindow(contentRect: chart.frame, styleMask: [.borderless], backing: .buffered, defer: true)
