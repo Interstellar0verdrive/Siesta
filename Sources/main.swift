@@ -379,6 +379,8 @@ final class ChartView: NSView, HandCursorView {
 
     /// Longer than this between two samples (one every 5 s) is a gap, not a slope.
     static let gapSeconds: TimeInterval = 30
+    /// Empty space between the two dotted lines that mark idle time cut out of the chart.
+    static let seamGap: CGFloat = 6
 
     /// Magnetic rest bands: near the edge of a rest band the hover line sticks to the change.
     var magneticBands = true
@@ -674,6 +676,18 @@ final class ChartView: NSView, HandCursorView {
 
         NSGraphicsContext.saveGraphicsState()
         NSBezierPath(rect: NSRect(x: plotLeft, y: plotsBottom, width: plotW, height: plotsTop - plotsBottom)).addClip()
+        // seams where idle time was cut out, halfway between the samples either side: the axis-break sign,
+        // two dotted lines with an empty strip between them (nothing is drawn across, lines and dividers included)
+        let seams: [CGFloat] = (1..<max(1, samples.count)).compactMap { i in
+            samples[i].cut && samples[i].t >= tStart && samples[i - 1].t <= tEnd ? ((x(samples[i - 1].t) + x(samples[i].t)) / 2).rounded() : nil
+        }
+        let seamHalf = ChartView.seamGap / 2 + 1          // half the strip, its two lines included
+        if !seams.isEmpty {
+            let clip = NSBezierPath(rect: NSRect(x: plotLeft - 1, y: 0, width: plotW + 2, height: bounds.height))
+            for sx in seams { clip.appendRect(NSRect(x: sx - seamHalf, y: plotsBottom - 1, width: 2 * seamHalf, height: plotsTop - plotsBottom + 2)) }
+            clip.windingRule = .evenOdd
+            clip.addClip()
+        }
         // rest shading
         NSColor.labelColor.withAlphaComponent(0.08).setFill()
         var restStart: TimeInterval? = nil
@@ -684,12 +698,6 @@ final class ChartView: NSView, HandCursorView {
                 NSRect(x: x(max(rs, tStart)), y: plotsBottom, width: max(1, x(smp.t) - x(max(rs, tStart))), height: plotsTop - plotsBottom).fill()
                 restStart = nil
             }
-        }
-        // seams where idle time was cut out: a faint hairline halfway between the samples either side
-        NSColor.labelColor.withAlphaComponent(0.2).setFill()
-        for i in 1..<max(1, samples.count) where samples[i].cut && samples[i].t >= tStart && samples[i - 1].t <= tEnd {
-            let sx = (x(samples[i - 1].t) + x(samples[i].t)) / 2
-            NSRect(x: sx.rounded() - 0.5, y: plotsBottom, width: 1, height: plotsTop - plotsBottom).fill()
         }
         // divider between the lanes and baseline above the time axis
         NSColor.labelColor.withAlphaComponent(0.22).setStroke()
@@ -738,6 +746,14 @@ final class ChartView: NSView, HandCursorView {
         tempColor.setStroke()
         path({ $0.temp }, lane: tempLane, maxV: tMax, minV: tMin).stroke()
         NSGraphicsContext.restoreGraphicsState()
+        // dotted, not dashed: the "Now" line is the dashed one
+        NSColor.labelColor.withAlphaComponent(0.45).setStroke()
+        for sx in seams {
+            for lx in [sx - seamHalf + 0.5, sx + seamHalf - 0.5] {
+                let l = NSBezierPath(); l.move(to: NSPoint(x: lx, y: plotsBottom)); l.line(to: NSPoint(x: lx, y: plotsTop))
+                l.lineWidth = 1; l.setLineDash([1, 2], count: 2, phase: 0); l.stroke()
+            }
+        }
         // now line + end dots
         let nowVisible = last.t <= tEnd + 0.5
         let nx = x(last.t)
@@ -3397,7 +3413,7 @@ if let i = CommandLine.arguments.firstIndex(of: "--debug-legend"), i + 1 < Comma
 }
 if let i = CommandLine.arguments.firstIndex(of: "--debug-hold"), i + 1 < CommandLine.arguments.count {
     // "Hold the chart while idle": 105 s idle, held for 140 s, then work; the idle stretch is cut out,
-    // the axis keeps the real times. Dark, as in the popover.
+    // the axis keeps the real times. Dark, as in the popover (add `light` for the light one).
     let t0 = Calendar.current.date(bySettingHour: 21, minute: 59, second: 0, of: Date())!.timeIntervalSinceReferenceDate
     var samples: [Sample] = []
     for k in 0...105 { let t = t0 + Double(k); samples.append(Sample(t: t, cpu: 3, temp: 62 + 8 * sin(Double(k) / 7), resting: false)) }
@@ -3407,7 +3423,8 @@ if let i = CommandLine.arguments.firstIndex(of: "--debug-hold"), i + 1 < Command
     let chart = ChartView()
     chart.frame = NSRect(x: 0, y: 0, width: 380, height: chart.fullHeight)
     chart.samples = samples
-    let appearance = NSAppearance(named: .darkAqua)!
+    let light = CommandLine.arguments.contains("light")
+    let appearance = NSAppearance(named: light ? .aqua : .darkAqua)!
     let host = NSWindow(contentRect: chart.frame, styleMask: [.borderless], backing: .buffered, defer: true)
     host.appearance = appearance; host.contentView = chart
     appearance.performAsCurrentDrawingAppearance { chart.cacheDisplay(in: chart.bounds, to: chart.bitmapImageRepForCachingDisplay(in: chart.bounds)!) }
@@ -3416,7 +3433,7 @@ if let i = CommandLine.arguments.firstIndex(of: "--debug-hold"), i + 1 < Command
     appearance.performAsCurrentDrawingAppearance { chart.cacheDisplay(in: chart.bounds, to: rep) }
     let image = NSImage(size: chart.bounds.size)
     image.lockFocus()
-    NSColor(white: 0.17, alpha: 1).setFill(); chart.bounds.fill()
+    NSColor(white: light ? 0.93 : 0.17, alpha: 1).setFill(); chart.bounds.fill()
     rep.draw(in: chart.bounds, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
     image.unlockFocus()
     if let tiff = image.tiffRepresentation { try? NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: CommandLine.arguments[i + 1])) }
