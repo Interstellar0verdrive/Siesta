@@ -36,9 +36,9 @@ Siesta counts the minutes the encoder has **actually** been working, then pauses
 It changes to show whether the cycle is stopped, HandBrake is encoding, taking a scheduled rest, or Siesta is waiting for work. During work and rest, the number beside it shows the minutes until the next change.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="Resources/siesta-states-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="Resources/siesta-states-light.png">
-  <img src="Resources/siesta-states-dark.png" alt="The four Siesta states: cycle stopped, working, resting, waiting">
+  <source media="(prefers-color-scheme: dark)" srcset="Resources/siesta-states-dark.webp">
+  <source media="(prefers-color-scheme: light)" srcset="Resources/siesta-states-light.webp">
+  <img src="Resources/siesta-states-dark.webp" alt="The four Siesta states: cycle stopped, working, resting, waiting">
 </picture>
 
 <br>
@@ -86,7 +86,7 @@ Turn on **Detached window** to keep Siesta open as a regular window that floats 
 
 Siesta takes its name from the afternoon nap. The cat curled up beneath a warm sun reflects the same idea: even a Mac running a long encode deserves a little rest along the way.
 
-![The Siesta icon in its light and dark variants: a cat asleep in front of the sun](Resources/siesta-icon-showcase.png)
+![The Siesta icon in its light and dark variants: a cat asleep in front of the sun](Resources/siesta-icon-showcase.webp)
 
 <br>
 
