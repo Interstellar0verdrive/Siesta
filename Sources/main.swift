@@ -1572,7 +1572,14 @@ final class SettingsGroup: NSView {
 final class SettingsRow: NSView {
     /// The grey of the second line: lighter than the system's secondary grey, which sits too close to the titles.
     /// (A dynamic colour: labelColor.withAlphaComponent would freeze the appearance current when it is made.)
-    static let detailColor = NSColor(name: nil) { $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? NSColor(white: 1, alpha: 0.4) : NSColor(white: 0, alpha: 0.4) }
+    static let detailAlpha: CGFloat = {
+        if let i = CommandLine.arguments.firstIndex(of: "--debug-detail-alpha"), i + 1 < CommandLine.arguments.count,
+           let a = Double(CommandLine.arguments[i + 1]) { return CGFloat(a) }   // for comparing greys on a board
+        return 0.32
+    }()
+    static let detailColor = NSColor(name: nil) {
+        $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? NSColor(white: 1, alpha: detailAlpha) : NSColor(white: 0, alpha: detailAlpha)
+    }
     let title = NSTextField(labelWithString: "")
     let detail = NSTextField(labelWithString: "")
     let detailLine: NSStackView
@@ -2442,7 +2449,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         // a quiet credit under the last group, with the link to the project page
         let creditText: String = {
             if let i = CommandLine.arguments.firstIndex(of: "--debug-credit"), i + 1 < CommandLine.arguments.count { return CommandLine.arguments[i + 1] }
-            return "Made in Italy · "
+            return "Siesta is open source · "
         }()
         let credit = NSTextField(labelWithString: creditText)
         credit.font = .systemFont(ofSize: 11)
