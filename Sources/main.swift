@@ -1754,7 +1754,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     var pendingAutoInstall = false
     // automatic start: armed while the encoder has been seen idle since the cycle last stopped
     var autoStartArmed = true
-    var autoBusySeconds: Double = 0
+    var autoBusySeconds: Double = 0, autoIdleSeconds: Double = 0
     /// The newest reading, for the menu bar: recorded even while the chart is held still.
     var latestReading: Sample?
     var logExpanded = false
@@ -1919,6 +1919,15 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                 self?.resume()
                 NSApp.terminate(nil)
             }
+            src.resume()
+            signalSources.append(src)
+        }
+        // `--debug-control`: drive the app from a shell while testing — SIGUSR1 presses Start/Stop cycle, SIGUSR2 Quit Siesta
+        guard CommandLine.arguments.contains("--debug-control") else { return }
+        for (sig, act) in [(SIGUSR1, { [weak self] in self?.toggleRun() }), (SIGUSR2, { [weak self] in self?.quit() })] as [(Int32, () -> Void)] {
+            signal(sig, SIG_IGN)
+            let src = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+            src.setEventHandler(handler: act)
             src.resume()
             signalSources.append(src)
         }
@@ -2957,7 +2966,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             phase = .stopped
             log("Cycle stopped")
             autoStartArmed = false   // stopped by hand while encoding: wait for the encoder to go idle first
-            autoBusySeconds = 0
+            autoBusySeconds = 0; autoIdleSeconds = 0
             if pendingAutoInstall {
                 pendingAutoInstall = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.performUpdate() }
@@ -3061,19 +3070,24 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         // still; when work comes back the idle stretch is cut out and the line carries on where it stopped.
         // Working means busy now, whether or not a cycle runs (Start automatically waits a few seconds).
         let working = phase == .resting || (phase == .working && isEncoding) || rawCpu >= threshold
-        if flag("holdChart", false) && !working { holding = true; return }
+        if flag("holdChart", false) && !working {
+            if debugSamples { debugPrint(String(format: "HELD cpu %.1f%% (raw %.0f, threshold %.0f)  phase %@", cpu, rawCpu, threshold, "\(phase)")) }
+            holding = true; return
+        }
         var cut = false
         if holding {
             holding = false
-            if let lastT = chart.samples.last?.t, chartNow - lastT > every + 0.5 {
+            // a held moment of a few seconds (a thawed encoder's first, low reading) is no stretch worth a seam
+            if let lastT = chart.samples.last?.t, chartNow - lastT > every + 5 {
                 heldTime += chartNow - lastT - every
                 cut = true
             }
         }
         chart.samples.append(Sample(t: t - heldTime, cpu: cpu, temp: temp, resting: phase == .resting, clock: t, cut: cut))
         if debugSamples, let s = chart.samples.last {
-            debugPrint(String(format: "SAMPLE cpu %.1f%% of the Mac (%.0f%% of one core)  temp %@  %@", s.cpu, s.cpu * coreCount,
-                              s.temp.map { String(format: "%.1f °C", $0) } ?? "n/a", s.resting ? "resting" : "working"))
+            debugPrint(String(format: "SAMPLE cpu %.1f%% of the Mac (%.0f%% of one core)  temp %@  %@  phase %@  n %d  held %.0f s%@", s.cpu, s.cpu * coreCount,
+                              s.temp.map { String(format: "%.1f °C", $0) } ?? "n/a", s.resting ? "resting" : "working", "\(phase)",
+                              chart.samples.count, heldTime, s.cut ? "  CUT" : ""))
         }
         chart.noteNewSample()
         if let first = chart.samples.first?.t, t - heldTime - first > chart.maxWindow + 60 {
@@ -3100,7 +3114,10 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             record(cpu: total)
             // "Start automatically": a few seconds of real work after the encoder was last seen idle
             if flag("autoStart", false) {
-                if total >= threshold { autoBusySeconds += dt } else { autoBusySeconds = 0; autoStartArmed = true }
+                // re-armed only by real idle time: the first reading after a frozen encoder is thawed is low
+                // (it slept through most of the second), and a gap between queue items is not the end either
+                if total >= threshold { autoBusySeconds += dt; autoIdleSeconds = 0 }
+                else { autoBusySeconds = 0; autoIdleSeconds += dt; if autoIdleSeconds >= idleGrace { autoStartArmed = true } }
                 if autoStartArmed && autoBusySeconds >= 3 {
                     autoStartArmed = false; autoBusySeconds = 0
                     log("\(target.name) started working · cycle started automatically")
