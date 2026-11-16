@@ -1148,12 +1148,13 @@ final class HandCursorTracker: NSResponder {
 /// Small underlined text link: secondary colour at rest, full label colour under the pointer, hand cursor.
 final class LinkButton: NSButton, HandCursorView {
     var text = "" { didSet { restyle() } }
+    var restColor: NSColor = .secondaryLabelColor { didSet { restyle() } }
     var hoverColor: NSColor = .labelColor { didSet { restyle() } }
     private var hovered = false { didSet { restyle() } }
     private func restyle() {
         attributedTitle = NSAttributedString(string: text, attributes: [
             .font: NSFont.systemFont(ofSize: 11),
-            .foregroundColor: hovered && isEnabled ? hoverColor : NSColor.secondaryLabelColor,
+            .foregroundColor: hovered && isEnabled ? hoverColor : restColor,
             .underlineStyle: NSUnderlineStyle.single.rawValue])
     }
     override func updateTrackingAreas() {
@@ -1569,6 +1570,9 @@ final class SettingsGroup: NSView {
 /// A settings row: title (and an optional grey line under it) on the left, the control on the right.
 /// 34 pt tall, 44 pt with the second line.
 final class SettingsRow: NSView {
+    /// The grey of the second line: lighter than the system's secondary grey, which sits too close to the titles.
+    /// (A dynamic colour: labelColor.withAlphaComponent would freeze the appearance current when it is made.)
+    static let detailColor = NSColor(name: nil) { $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? NSColor(white: 1, alpha: 0.4) : NSColor(white: 0, alpha: 0.4) }
     let title = NSTextField(labelWithString: "")
     let detail = NSTextField(labelWithString: "")
     let detailLine: NSStackView
@@ -1578,8 +1582,9 @@ final class SettingsRow: NSView {
         title.stringValue = text
         title.font = .systemFont(ofSize: 13)
         self.detail.font = .systemFont(ofSize: 11)
-        self.detail.textColor = .secondaryLabelColor
+        self.detail.textColor = SettingsRow.detailColor
         self.detail.stringValue = detail ?? ""
+        link?.restColor = SettingsRow.detailColor
         detailLine.setViews([self.detail] + (link.map { [$0] } ?? []), in: .leading)
         detailLine.orientation = .horizontal; detailLine.spacing = 0; detailLine.alignment = .firstBaseline
         let texts = NSStackView(views: [title, detailLine])
@@ -2427,17 +2432,32 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         gitHubLink.toolTip = "Siesta on GitHub"
         checkNowButton.target = self; checkNowButton.action = #selector(checkNow)
         checkNowButton.compact = true
-        versionRow = SettingsRow("Siesta \(currentVersion)", detail: "", link: gitHubLink, control: checkNowButton)
+        versionRow = SettingsRow("Siesta \(currentVersion)", detail: "", control: checkNowButton)
         let updates = SettingsGroup(title: "Updates", rows: [
             SettingsRow("Check for updates automatically", control: checkSwitch),
             SettingsRow("Install updates automatically", control: installSwitch),
             versionRow,
         ])
 
-        let column = NSStackView(views: [head, general, cycle, chartGroup, updates])
+        // a quiet credit under the last group, with the link to the project page
+        let creditText: String = {
+            if let i = CommandLine.arguments.firstIndex(of: "--debug-credit"), i + 1 < CommandLine.arguments.count { return CommandLine.arguments[i + 1] }
+            return "Made in Italy · "
+        }()
+        let credit = NSTextField(labelWithString: creditText)
+        credit.font = .systemFont(ofSize: 11)
+        credit.textColor = .tertiaryLabelColor
+        gitHubLink.restColor = .tertiaryLabelColor
+        let creditLine = NSStackView(views: [credit, gitHubLink])
+        creditLine.orientation = .horizontal; creditLine.spacing = 0; creditLine.alignment = .firstBaseline
+        let creditRow = NSStackView()
+        creditRow.setViews([creditLine], in: .center)   // centred under the boxes
+        creditRow.orientation = .horizontal; creditRow.alignment = .centerY
+        let column = NSStackView(views: [head, general, cycle, chartGroup, updates, creditRow])
         column.orientation = .vertical; column.alignment = .width; column.spacing = 19
+        column.setCustomSpacing(14, after: updates)
         column.edgeInsets = NSEdgeInsets(top: App.topInset, left: 24, bottom: 20, right: 24)
-        for row in [general, cycle, chartGroup, updates] as [NSView] {
+        for row in [general, cycle, chartGroup, updates, creditRow] as [NSView] {
             NSLayoutConstraint.activate([
                 row.leadingAnchor.constraint(equalTo: column.leadingAnchor, constant: 24),
                 row.trailingAnchor.constraint(equalTo: column.trailingAnchor, constant: -24),
@@ -2485,7 +2505,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         else if let last = lastCheck {
             text = last.result == "failed" ? "Could not check at \(f.string(from: last.date))" : "Up to date · checked at \(f.string(from: last.date))"
         } else { text = flag("checkUpdates", true) ? "Not checked yet" : "Automatic checks off" }
-        row.detail.stringValue = text + " · "
+        row.detail.stringValue = text
         checkNowButton.isEnabled = !checking && !updating
     }
 
