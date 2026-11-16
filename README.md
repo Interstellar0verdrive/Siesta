@@ -61,7 +61,7 @@ You can change Work and Rest while the cycle runs: the new value applies as soon
 
 Expand **CPU & temperature** to see the recent history. The blue line is the encoder's CPU usage as a share of the whole Mac, from 0% to 100%; the orange line is the hottest CPU core. The shaded bands mark scheduled rests: CPU usage falls while the worker is paused, and the temperature line shows how the Mac responds.
 
-The chart starts with a five-minute view, grows with the session, and then keeps a rolling six-hour history. Hovering over the plot shows the readings and the time of that moment. Pinch on the trackpad or use the mouse wheel over the plot to zoom around the cursor, down to one minute and never beyond the recorded history. Scroll sideways with two fingers, or drag the plot, to move back and forth in time; a chevron at the right edge means newer data is waiting and clicking it jumps back to now, while the one at the left edge jumps to the start of the history, both keeping the current zoom. Click **Reset** or double-click the plot to return to the automatic view.
+The chart starts with a five-minute view, grows with the session, and then keeps a rolling six-hour history. Hovering over the plot shows the readings and the time of that moment; near the edge of a rest band the readout snaps to the moment the rest began or ended. When there are more readings than pixels the lines are drawn as smooth curves, never across the start or end of a rest. Pinch on the trackpad or use the mouse wheel over the plot to zoom around the cursor, down to one minute and never beyond the recorded history. Scroll sideways with two fingers, or drag the plot, to move back and forth in time; a chevron at the right edge means newer data is waiting and clicking it jumps back to now, while the one at the left edge jumps to the start of the history, both keeping the current zoom. The legend at the top right always shows how much time the view spans; after zooming or moving, a small reload icon next to it, or a double-click on the plot, returns to the automatic view.
 
 Collapse the chart with the chevron next to its title and the header keeps showing the current CPU and temperature readings, as in the compact view above, just the current readings. Siesta remembers whether you left the chart and the log open or closed.
 
@@ -104,9 +104,9 @@ xattr -d com.apple.quarantine /Applications/Siesta.app
 
 ## Updates
 
-The current version is shown in small print next to the Quit button. While Siesta is running it asks GitHub for the latest release at launch and then every six hours; nothing runs while the app is closed.
+The current version is shown in small print next to the Quit button, with a **?** button that opens this page. While Siesta is running it asks GitHub for the latest release at launch and then every six hours; nothing runs while the app is closed.
 
-When a newer release exists the version turns into an **Update to x.y.z** link. Clicking it downloads the release archive, verifies its SHA-256 checksum against the one published with the release, replaces the app in place (the old copy goes to the Trash) and relaunches. Because the new bundle is written by Siesta itself it carries no quarantine flag, so macOS does not ask for approval again: only the very first installation needs it. If the app lives in a folder Siesta cannot write to, or anything goes wrong, the link simply opens the release page instead.
+When a newer release exists a yellow **Update to x.y.z** chip appears at the top of the panel, and only then. Clicking it downloads the release archive, verifies its SHA-256 checksum against the one published with the release, replaces the app in place (the old copy goes to the Trash) and relaunches. Because the new bundle is written by Siesta itself it carries no quarantine flag, so macOS does not ask for approval again: only the very first installation needs it. If the app lives in a folder Siesta cannot write to, or anything goes wrong, the chip simply opens the release page instead.
 
 <br>
 
@@ -150,7 +150,7 @@ A few things I would like Siesta to do, in no particular order and with no dates
 - **GPU in the chart.** Alongside CPU and temperature, where it says something meaningful about the encode.
 - **A thermal mode.** Rest when the chip has been above a chosen temperature for a while, instead of after a fixed number of minutes.
 
-Smaller refinements, such as a preferences page and a lighter footprint, will arrive along the way.
+Smaller refinements, such as a preferences page, will arrive along the way.
 
 <br>
 
