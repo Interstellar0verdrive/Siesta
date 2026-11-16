@@ -340,7 +340,7 @@ final class ChartView: NSView, HandCursorView {
         hoveredArrow = leftArrowRect.contains(p) ? -1 : rightArrowRect.contains(p) ? 1 : 0
         guard !collapsed, let g = geom, let last = samples.last else { hoverT = nil; return }
         guard p.x >= g.left - 4, p.x <= g.right + 4, p.y >= g.bottom, p.y <= g.top else { hoverT = nil; return }
-        let t = g.start + Double((min(max(p.x, g.left), g.right) - g.left) / (g.right - g.left)) * g.span
+        guard let t = time(atX: p.x) else { return }
         hoverT = min(t, min(last.t, range.end))
     }
     override func mouseExited(with event: NSEvent) { hoverT = nil; hoveredArrow = 0 }
@@ -379,8 +379,22 @@ final class ChartView: NSView, HandCursorView {
 
     /// Longer than this between two samples (one every 5 s) is a gap, not a slope.
     static let gapSeconds: TimeInterval = 30
-    /// Empty space between the two dotted lines that mark idle time cut out of the chart.
-    static let seamGap: CGFloat = 6
+    /// Idle time cut out of the chart is marked by a strip this wide: 1 pt margin, a dotted line,
+    /// 6 pt of empty space, a dotted line, 1 pt margin.
+    static let seamStrip: CGFloat = 10
+    /// The strips drawn last: the time of the first sample after each cut and the strip's left edge.
+    private var strips: [(cut: TimeInterval, x0: CGFloat)] = []
+    /// The time under a point of the plot, stepping over the strips (inside one: the sample after the cut).
+    func time(atX px: CGFloat) -> TimeInterval? {
+        guard let g = geom else { return nil }
+        let p = min(max(px, g.left), g.right)
+        var shift: CGFloat = 0
+        for s in strips {
+            if p >= s.x0 + ChartView.seamStrip { shift += ChartView.seamStrip } else if p >= s.x0 { return s.cut }
+        }
+        let dataW = (g.right - g.left) - CGFloat(strips.count) * ChartView.seamStrip
+        return g.start + Double((p - g.left - shift) / max(1, dataW)) * g.span
+    }
 
     /// Magnetic rest bands: near the edge of a rest band the hover line sticks to the change.
     var magneticBands = true
@@ -563,9 +577,7 @@ final class ChartView: NSView, HandCursorView {
         markCustom()
     }
     private func timeAt(_ event: NSEvent) -> TimeInterval? {
-        guard let g = geom else { return nil }
-        let p = convert(event.locationInWindow, from: nil)
-        return g.start + Double((min(max(p.x, g.left), g.right) - g.left) / (g.right - g.left)) * g.span
+        time(atX: convert(event.locationInWindow, from: nil).x)
     }
     override func scrollWheel(with event: NSEvent) {
         guard let g = geom, !collapsed else { return }
@@ -664,27 +676,31 @@ final class ChartView: NSView, HandCursorView {
         let (tStart, tEnd) = range
         let w = tEnd - tStart
         geom = (plotLeft, plotRight, tStart, w, plotsBottom, plotsTop)
-        func x(_ t: TimeInterval) -> CGFloat { plotLeft + CGFloat((t - tStart) / w) * plotW }
+        // where idle time was cut out, an empty strip is inserted between the samples either side:
+        // everything after it moves right by the strip's width, so the strip never covers any data
+        let cuts = samples.filter { $0.cut && $0.t > tStart && $0.t <= tEnd }.map { $0.t }
+        let strip = ChartView.seamStrip
+        let dataW = plotW - CGFloat(cuts.count) * strip
+        func x(_ t: TimeInterval) -> CGFloat {
+            plotLeft + CGFloat((t - tStart) / w) * dataW + strip * CGFloat(cuts.filter { $0 <= t }.count)
+        }
+        strips = cuts.enumerated().map { k, c in (c, (plotLeft + CGFloat((c - tStart) / w) * dataW + strip * CGFloat(k)).rounded()) }
         // the sample under the cursor, if any: it takes over the right-hand values and the axis
         // (with magnetic bands, near a band edge: the last sample before the change, the line on the edge)
         let hover: (sample: Sample, t: TimeInterval)? = hoverT.flatMap { ht in
             let near = visibleSamples(tStart, tEnd)
-            if magneticBands, let snap = ChartView.magnet(near, at: ht, secondsPerPixel: w / Double(plotW)) { return (snap.sample, snap.edge) }
+            if magneticBands, let snap = ChartView.magnet(near, at: ht, secondsPerPixel: w / Double(dataW)) { return (snap.sample, snap.edge) }
             return near.min { abs($0.t - ht) < abs($1.t - ht) }.flatMap { abs($0.t - ht) < 30 ? ($0, $0.t) : nil }
         }
         let hovered = hover?.sample
 
         NSGraphicsContext.saveGraphicsState()
         NSBezierPath(rect: NSRect(x: plotLeft, y: plotsBottom, width: plotW, height: plotsTop - plotsBottom)).addClip()
-        // seams where idle time was cut out, halfway between the samples either side: the axis-break sign,
-        // two dotted lines with an empty strip between them (nothing is drawn across, lines and dividers included)
-        let seams: [CGFloat] = (1..<max(1, samples.count)).compactMap { i in
-            samples[i].cut && samples[i].t >= tStart && samples[i - 1].t <= tEnd ? ((x(samples[i - 1].t) + x(samples[i].t)) / 2).rounded() : nil
-        }
-        let seamHalf = ChartView.seamGap / 2 + 1          // half the strip, its two lines included
-        if !seams.isEmpty {
+        // the strips get the axis-break sign: two dotted lines with nothing drawn between them,
+        // not even the divider and the baseline
+        if !strips.isEmpty {
             let clip = NSBezierPath(rect: NSRect(x: plotLeft - 1, y: 0, width: plotW + 2, height: bounds.height))
-            for sx in seams { clip.appendRect(NSRect(x: sx - seamHalf, y: plotsBottom - 1, width: 2 * seamHalf, height: plotsTop - plotsBottom + 2)) }
+            for s in strips { clip.appendRect(NSRect(x: s.x0 + 1, y: plotsBottom - 1, width: strip - 2, height: plotsTop - plotsBottom + 2)) }
             clip.windingRule = .evenOdd
             clip.addClip()
         }
@@ -748,8 +764,8 @@ final class ChartView: NSView, HandCursorView {
         NSGraphicsContext.restoreGraphicsState()
         // dotted, not dashed: the "Now" line is the dashed one
         NSColor.labelColor.withAlphaComponent(0.45).setStroke()
-        for sx in seams {
-            for lx in [sx - seamHalf + 0.5, sx + seamHalf - 0.5] {
+        for s in strips {
+            for lx in [s.x0 + 1.5, s.x0 + strip - 1.5] {
                 let l = NSBezierPath(); l.move(to: NSPoint(x: lx, y: plotsBottom)); l.line(to: NSPoint(x: lx, y: plotsTop))
                 l.lineWidth = 1; l.setLineDash([1, 2], count: 2, phase: 0); l.stroke()
             }
@@ -3418,7 +3434,8 @@ if let i = CommandLine.arguments.firstIndex(of: "--debug-hold"), i + 1 < Command
     var samples: [Sample] = []
     for k in 0...105 { let t = t0 + Double(k); samples.append(Sample(t: t, cpu: 3, temp: 62 + 8 * sin(Double(k) / 7), resting: false)) }
     let held = 140.0
-    for k in 106...130 {
+    // `fresh`: work has only just come back (two seconds after the cut)
+    for k in 106...(CommandLine.arguments.contains("fresh") ? 107 : 130) {
         samples.append(Sample(t: t0 + Double(k), cpu: 40 + Double(k - 106), temp: 90 + Double(k - 106) * 0.7, resting: false, clock: t0 + Double(k) + held, cut: k == 106)) }
     let chart = ChartView()
     chart.frame = NSRect(x: 0, y: 0, width: 380, height: chart.fullHeight)
