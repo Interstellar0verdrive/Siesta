@@ -2654,7 +2654,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         guard let cat = stateIcon(state, panel: false, description: description) else { return nil }
         if time == nil && columns.isEmpty { return cat }
         let timeFont = NSFont.monospacedDigitSystemFont(ofSize: NSFont.menuBarFont(ofSize: 0).pointSize, weight: .regular)
-        let captionFont = NSFont.systemFont(ofSize: 7.5, weight: .semibold)
+        // regular, not semibold: at 7.5 pt the heavier strokes merged into a blur; this matches Stats pixel for pixel
+        let captionFont = NSFont.systemFont(ofSize: 7.5, weight: .regular)
         let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
         func attr(_ s: String, _ f: NSFont) -> NSAttributedString { NSAttributedString(string: s, attributes: [.font: f, .foregroundColor: NSColor.black]) }
         let h = menuBarHeight
