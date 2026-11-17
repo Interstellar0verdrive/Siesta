@@ -256,18 +256,44 @@ final class ProcessSampler {
     }
 }
 
-// MARK: - CPU & temperature chart
+/// GPU use of the whole Mac, the "Device Utilization %" the graphics driver publishes in the IORegistry
+/// (the value Stats shows). No entitlement needed; a read costs about 27 µs. It is a system figure, not
+/// HandBrake's: with a software encode it stays at the desktop's own 10–15%, with HandBrake's VideoToolbox
+/// filters (which run on the GPU) it climbs to about 80%. The media engine that encodes with VideoToolbox
+/// has no readable counter without root.
+final class GPUReader {
+    private var service: io_service_t = 0
+    init() {
+        service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOAccelerator"))
+        if service != 0 && read() == nil { IOObjectRelease(service); service = 0 }
+    }
+    deinit { if service != 0 { IOObjectRelease(service) } }
+    /// False on a Mac whose graphics driver publishes no utilization: the GPU is then left out everywhere.
+    var available: Bool { service != 0 }
+    /// Percent of the GPU in use right now, 0–100, or nil when the driver gives no figure.
+    func read() -> Double? {
+        guard service != 0,
+              let stats = IORegistryEntryCreateCFProperty(service, "PerformanceStatistics" as CFString, kCFAllocatorDefault, 0)?
+                .takeRetainedValue() as? [String: Any],
+              let n = stats["Device Utilization %"] as? NSNumber else { return nil }
+        return min(100, max(0, n.doubleValue))
+    }
+}
+
+// MARK: - CPU, GPU & temperature chart
 struct Sample {
     /// Where the sample sits on the chart: the wall clock, minus the idle stretches cut out while
     /// "Hold the chart while idle" is on, so the line carries on where it stopped.
     let t: TimeInterval
     let cpu: Double; let temp: Double?; let resting: Bool
+    /// GPU use of the whole Mac in percent; nil where it was not read.
+    let gpu: Double?
     /// The real time of the sample, shown on the axis and under the pointer.
     let clock: TimeInterval
     /// First sample after such a cut: the line breaks here and a hairline marks the seam.
     let cut: Bool
-    init(t: TimeInterval, cpu: Double, temp: Double?, resting: Bool, clock: TimeInterval? = nil, cut: Bool = false) {
-        self.t = t; self.cpu = cpu; self.temp = temp; self.resting = resting; self.clock = clock ?? t; self.cut = cut
+    init(t: TimeInterval, cpu: Double, temp: Double?, resting: Bool, clock: TimeInterval? = nil, cut: Bool = false, gpu: Double? = nil) {
+        self.t = t; self.cpu = cpu; self.temp = temp; self.resting = resting; self.clock = clock ?? t; self.cut = cut; self.gpu = gpu
     }
 }
 
@@ -279,6 +305,15 @@ final class ChartView: NSView, HandCursorView {
     let headerRow = ClickableRow()
     let chevron = NSImageView()
     let header = NSTextField(labelWithString: "CPU & temperature")
+    /// A third lane for the GPU, between CPU and temperature; off where the Mac gives no GPU figure.
+    var showsGPU = false {
+        didSet {
+            guard showsGPU != oldValue else { return }
+            if heightConstraint != nil && !collapsed { heightConstraint.constant = fullHeight }
+            needsDisplay = true
+        }
+    }
+    var title: String { showsGPU ? "CPU, GPU & temperature" : "CPU & temperature" }
     /// Plain text (a disabled button would be drawn faded on the popover's translucent background).
     let legend = NSTextField(labelWithString: "")
     /// Shown only while the view is zoomed or panned: back to the automatic view.
@@ -598,7 +633,8 @@ final class ChartView: NSView, HandCursorView {
         }
     }
     override func magnify(with event: NSEvent) { zoom(by: 1 / max(0.2, 1 + event.magnification), at: timeAt(event)) }
-    let fullHeight: CGFloat = 140
+    /// With the GPU the lanes go from 38 to 34 pt and the gaps from 14 to 12, and the chart grows by 36 pt.
+    var fullHeight: CGFloat { showsGPU ? 176 : 140 }
     let collapsedHeight: CGFloat = 18
     var targetHeight: CGFloat { collapsed ? collapsedHeight : fullHeight }
     var heightConstraint: NSLayoutConstraint!
@@ -634,9 +670,32 @@ final class ChartView: NSView, HandCursorView {
     var isDark: Bool { effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
     var tempColor: NSColor { isDark ? NSColor.systemOrange.blended(withFraction: 0.15, of: .white) ?? .systemOrange : .systemOrange }
     var cpuColor: NSColor { panelBlue(for: self) }
+    /// The system green, darkened a little on the light panel and lifted a little on the dark one, like the others.
+    var gpuColor: NSColor {
+        isDark ? NSColor.systemGreen.blended(withFraction: 0.1, of: .white) ?? .systemGreen
+               : NSColor.systemGreen.blended(withFraction: 0.12, of: .black) ?? .systemGreen
+    }
 
+    /// Folded with the GPU, the readings take the title's place, at the title's 13 pt: the title and three
+    /// readings do not fit side by side in the popover, and each reading carries its own name anyway.
+    private func headerText() -> NSAttributedString {
+        let font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        guard collapsed && showsGPU else { return NSAttributedString(string: title, attributes: [.font: font, .foregroundColor: NSColor.labelColor]) }
+        let last = samples.last
+        let a = NSMutableAttributedString()
+        func part(_ label: String, _ value: String) {
+            a.append(NSAttributedString(string: label, attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.secondaryLabelColor]))
+            a.append(NSAttributedString(string: value, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold), .foregroundColor: NSColor.labelColor]))
+        }
+        func dot() { a.append(NSAttributedString(string: "   ·   ", attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.tertiaryLabelColor])) }
+        part("CPU ", last.map { "\(Int($0.cpu))%" } ?? "–"); dot()
+        part("GPU ", last?.gpu.map { "\(Int($0.rounded()))%" } ?? "n/a"); dot()
+        part("Temp ", last?.temp.map { "\(Int($0.rounded()))°C" } ?? "n/a")
+        return a
+    }
     /// Legend text: the live values while the plot is folded away, otherwise the rest key and the view's width.
     private func legendText() -> NSAttributedString {
+        if collapsed && showsGPU { return NSAttributedString(string: "") }   // the readings are in the header
         if collapsed {
             let last = samples.last
             let a = NSMutableAttributedString()
@@ -661,6 +720,12 @@ final class ChartView: NSView, HandCursorView {
     /// The legend is refreshed just before each redraw, the moment AppKit allows layout changes:
     /// set from inside draw() its new width would only be picked up by a later layout pass.
     override func viewWillDraw() {
+        let head = headerText()
+        if !header.attributedStringValue.isEqual(to: head) {
+            header.attributedStringValue = head
+            header.invalidateIntrinsicContentSize()
+            layoutSubtreeIfNeeded()
+        }
         let text = legendText()
         if !legend.attributedStringValue.isEqual(to: text) {
             legend.attributedStringValue = text
@@ -676,9 +741,11 @@ final class ChartView: NSView, HandCursorView {
         let plotLeft: CGFloat = 46, plotRight = bounds.width - 48, top = bounds.height - 30, axisH: CGFloat = 20
         let plotW = plotRight - plotLeft
         let plotsTop = top, plotsBottom = axisH
-        let gap: CGFloat = 14
-        let laneH = (plotsTop - plotsBottom - gap) / 2
-        let cpuLane = NSRect(x: plotLeft, y: plotsBottom + laneH + gap, width: plotW, height: laneH)
+        let lanes: CGFloat = showsGPU ? 3 : 2
+        let gap: CGFloat = showsGPU ? 12 : 14
+        let laneH = (plotsTop - plotsBottom - gap * (lanes - 1)) / lanes
+        let cpuLane = NSRect(x: plotLeft, y: plotsBottom + (laneH + gap) * (lanes - 1), width: plotW, height: laneH)
+        let gpuLane = NSRect(x: plotLeft, y: plotsBottom + laneH + gap, width: plotW, height: laneH)
         let tempLane = NSRect(x: plotLeft, y: plotsBottom, width: plotW, height: laneH)
         let (tStart, tEnd) = range
         let w = tEnd - tStart
@@ -729,7 +796,7 @@ final class ChartView: NSView, HandCursorView {
         }
         // divider between the lanes and baseline above the time axis
         NSColor.labelColor.withAlphaComponent(0.22).setStroke()
-        for y in [cpuLane.minY - gap / 2, tempLane.minY] {
+        for y in (showsGPU ? [cpuLane.minY - gap / 2, gpuLane.minY - gap / 2, tempLane.minY] : [cpuLane.minY - gap / 2, tempLane.minY]) {
             let b = NSBezierPath(); b.move(to: NSPoint(x: plotLeft, y: y)); b.line(to: NSPoint(x: plotRight, y: y)); b.lineWidth = 1; b.stroke()
         }
         // lines: zoomed in, straight segments between the real samples; with more samples than pixels,
@@ -769,6 +836,10 @@ final class ChartView: NSView, HandCursorView {
         }
         cpuColor.setStroke()
         path({ $0.cpu }, lane: cpuLane, maxV: cpuMax, minV: 0).stroke()
+        if showsGPU {
+            gpuColor.setStroke()
+            path({ $0.gpu }, lane: gpuLane, maxV: 100, minV: 0).stroke()
+        }
         let temps = visible.compactMap { $0.temp }
         let tMin = floor(((temps.min() ?? 30) - 5) / 10) * 10, tMax = ceil(((temps.max() ?? 80) + 5) / 10) * 10
         tempColor.setStroke()
@@ -811,6 +882,7 @@ final class ChartView: NSView, HandCursorView {
         }
         if live {
             dot(last.cpu, lane: cpuLane, maxV: cpuMax, minV: 0, cpuColor)
+            if showsGPU, let g = last.gpu { dot(g, lane: gpuLane, maxV: 100, minV: 0, gpuColor) }
             if let t = last.temp { dot(t, lane: tempLane, maxV: tMax, minV: tMin, tempColor) }
         }
         // labels
@@ -822,6 +894,10 @@ final class ChartView: NSView, HandCursorView {
         text("Temp", NSPoint(x: 0, y: tempLane.midY), tempColor, .semibold)
         let shown = hovered ?? last
         text("\(Int(shown.cpu))%", NSPoint(x: bounds.width, y: cpuLane.midY), cpuColor, .semibold, right: true)
+        if showsGPU {
+            text("GPU", NSPoint(x: 0, y: gpuLane.midY), gpuColor, .semibold)
+            text(shown.gpu.map { "\(Int($0.rounded()))%" } ?? "n/a", NSPoint(x: bounds.width, y: gpuLane.midY), gpuColor, .semibold, right: true)
+        }
         text(shown.temp.map { "\(Int($0.rounded()))°C" } ?? "n/a", NSPoint(x: bounds.width, y: tempLane.midY), tempColor, .semibold, right: true)
         // hover cursor: solid line and dots at the hovered sample
         if let hv = hovered, let hoverAt = hover?.t {
@@ -833,6 +909,7 @@ final class ChartView: NSView, HandCursorView {
                 color.setFill(); NSBezierPath(ovalIn: NSRect(x: hx - 3, y: min(lane.maxY, max(lane.minY, py)) - 3, width: 6, height: 6)).fill()
             }
             hdot(hv.cpu, lane: cpuLane, maxV: cpuMax, minV: 0, cpuColor)
+            if showsGPU, let g = hv.gpu { hdot(g, lane: gpuLane, maxV: 100, minV: 0, gpuColor) }
             if let t = hv.temp { hdot(t, lane: tempLane, maxV: tMax, minV: tMin, tempColor) }
         }
         // time axis: the start time flush left, "Now" at the right, the others spread evenly in between
@@ -1753,6 +1830,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     let progressDetail = NSTextField(labelWithString: "")
     let chart = ChartView()
     let thermometer = TemperatureReader()
+    let gpuMeter = GPUReader()
     let workBox = NumberBox()
     let restBox = NumberBox()
     var workField: NSTextField { workBox.field }
@@ -1784,7 +1862,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     let backButton = BackButton()
     let loginSwitch = ToggleSwitch(label: "Open at login")
     let appearancePicker = SegmentedPicker(items: ["System", "Light", "Dark"], label: "Appearance")
-    let menuBarChips = [("time", ChipToggle(title: "Time")), ("cpu", ChipToggle(title: "CPU")), ("temp", ChipToggle(title: "Temp"))]
+    let menuBarChips = [("time", ChipToggle(title: "Time")), ("cpu", ChipToggle(title: "CPU")), ("gpu", ChipToggle(title: "GPU")), ("temp", ChipToggle(title: "Temp"))]
     var menuBarRow: SettingsRow!
     let autoStartSwitch = ToggleSwitch(label: "Start automatically")
     let logFileSwitch = ToggleSwitch(label: "Save the activity log to a file")
@@ -1888,6 +1966,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         appearanceObservation = NSApp.observe(\.effectiveAppearance) { [weak self] _, _ in
             DispatchQueue.main.async { self?.syncPopoverAppearance() }
         }
+        chart.showsGPU = gpuMeter.available   // before the panel is built: the chart's height depends on it
         buildPanel()
         chart.smoothCurves = flag("smoothCurves", true)
         chart.magneticBands = flag("magneticBands", true)
@@ -2097,7 +2176,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             sumCpu += max(0, load); n += 1
             if t >= a && Int(t - a) % 5 == 0 {
                 let temp = 45 + fast + slow + noise() * 0.45 + (resting ? 0 : 0.6 * sin(t / 41))
-                out.append(Sample(t: t, cpu: sumCpu / Double(n), temp: temp, resting: resting))
+                // GPU as during a software encode: the desktop's own 11–12%, now and then a short spike
+                let spike = (Int(t) / 5) % 97 == 0 || (Int(t) / 5) % 131 == 0 ? 14.0 : 0
+                out.append(Sample(t: t, cpu: sumCpu / Double(n), temp: temp, resting: resting, gpu: 11.5 + noise() * 1.2 + spike))
                 sumCpu = 0; n = 0
             } else if t < a { sumCpu = 0; n = 0 }
             t += 1
@@ -2720,7 +2801,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                 self.refresh()
             }
         }
-        let chips = NSStackView(views: menuBarChips.map { $0.1 })
+        // no GPU figure on this Mac: no GPU chip
+        let chips = NSStackView(views: menuBarChips.filter { $0.0 != "gpu" || gpuMeter.available }.map { $0.1 })
         chips.orientation = .horizontal; chips.spacing = 5
         menuBarRow = SettingsRow("Menu bar", detail: "Next to the cat", control: chips)
         let general = SettingsGroup(title: "General", rows: [
@@ -2942,6 +3024,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let items = menuBarItems
         var columns: [(String, String)] = []
         if items.contains("cpu"), let r = latestReading { columns.append(("CPU", "\(Int(r.cpu.rounded()))%")) }
+        if items.contains("gpu"), let g = latestReading?.gpu { columns.append(("GPU", "\(Int(g.rounded()))%")) }
         if items.contains("temp"), let t = latestReading?.temp { columns.append(("TEMP", "\(Int(t.rounded()))°")) }
         return (items.contains("time") && !time.isEmpty ? time : nil, columns)
     }
@@ -3361,6 +3444,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     func record(cpu rawCpu: Double) {
         // each tick measures only its own second: a chart point is the mean of the ticks since the last one
         cpuSum += percentOfMachine(rawCpu); cpuTicks += 1
+        if let g = gpuMeter.read() { gpuSum += g; gpuTicks += 1 }
         let t = Date.timeIntervalSinceReferenceDate
         let chartNow = t - heldTime
         // dense while the chart is still filling its first 5 minutes, then one point every 5 s
@@ -3368,8 +3452,10 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         if let last = latestReading?.t, t - last < every - 0.5 { return }
         let cpu = cpuSum / Double(cpuTicks)
         cpuSum = 0; cpuTicks = 0
+        let gpu: Double? = gpuTicks > 0 ? gpuSum / Double(gpuTicks) : nil
+        gpuSum = 0; gpuTicks = 0
         let temp = thermometer.hottest()
-        latestReading = Sample(t: t, cpu: cpu, temp: temp, resting: phase == .resting)
+        latestReading = Sample(t: t, cpu: cpu, temp: temp, resting: phase == .resting, gpu: gpu)
         // "Hold the chart while idle": no new points while the encoder is not working, so the chart stands
         // still; when work comes back the idle stretch is cut out and the line carries on where it stopped.
         // Working means busy now, whether or not a cycle runs (Start automatically waits a few seconds).
@@ -3391,9 +3477,10 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             }
         }
         chart.holding = false
-        chart.samples.append(Sample(t: t - heldTime, cpu: cpu, temp: temp, resting: phase == .resting, clock: t, cut: cut))
+        chart.samples.append(Sample(t: t - heldTime, cpu: cpu, temp: temp, resting: phase == .resting, clock: t, cut: cut, gpu: gpu))
         if debugSamples, let s = chart.samples.last {
-            debugPrint(String(format: "SAMPLE cpu %.1f%% of the Mac (%.0f%% of one core)  temp %@  %@  phase %@  n %d  held %.0f s%@", s.cpu, s.cpu * coreCount,
+            debugPrint(String(format: "SAMPLE cpu %.1f%% of the Mac (%.0f%% of one core)  gpu %@  temp %@  %@  phase %@  n %d  held %.0f s%@", s.cpu, s.cpu * coreCount,
+                              s.gpu.map { String(format: "%.1f%%", $0) } ?? "n/a",
                               s.temp.map { String(format: "%.1f °C", $0) } ?? "n/a", s.resting ? "resting" : "working", "\(phase)",
                               chart.samples.count, heldTime, s.cut ? "  CUT" : ""))
         }
@@ -3409,6 +3496,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     }
     var lastCollapsedRefresh: TimeInterval = 0
     var cpuSum = 0.0, cpuTicks = 0
+    var gpuSum = 0.0, gpuTicks = 0
     /// Idle time cut out of the chart so far, and whether an idle stretch is being held right now.
     var heldTime: TimeInterval = 0, holding = false
 
@@ -3591,8 +3679,9 @@ if CommandLine.arguments.contains("--debug-sensors") { TemperatureReader.dump();
 if let i = CommandLine.arguments.firstIndex(of: "--debug-menubar"), i + 1 < CommandLine.arguments.count {
     // the menu bar item for a few combinations, white on a dark bar and black on a light one, at 4x, into one PNG
     let rows: [(String?, [(caption: String, value: String)])] = [
-        ("12m", []), ("12m", [("CPU", "83%"), ("TEMP", "99°")]), (nil, [("CPU", "0%"), ("TEMP", "44°")]), (nil, [("CPU", "0%")]), (nil, [("TEMP", "50°")]), ("4m", [("CPU", "100%")])]
-    let scale: CGFloat = 4, rowH: CGFloat = 30, w: CGFloat = 170
+        ("12m", []), ("12m", [("CPU", "83%"), ("TEMP", "99°")]), ("12m", [("CPU", "86%"), ("GPU", "12%"), ("TEMP", "98°")]), (nil, [("CPU", "0%"), ("TEMP", "44°")]),
+        (nil, [("CPU", "0%")]), (nil, [("GPU", "78%")]), (nil, [("TEMP", "50°")]), ("4m", [("CPU", "100%")])]
+    let scale: CGFloat = 4, rowH: CGFloat = 30, w: CGFloat = 220
     let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(w * 2 * scale), pixelsHigh: Int(rowH * CGFloat(rows.count) * scale), bitsPerSample: 8,
                                samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
     rep.size = NSSize(width: w * 2, height: rowH * CGFloat(rows.count))
