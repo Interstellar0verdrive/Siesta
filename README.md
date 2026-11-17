@@ -91,7 +91,7 @@ The gear next to the version number slides the panel over to the settings page; 
 
 - **General.** Open Siesta at login, follow the system appearance or force light or dark, open the panel as a popover or as a window, and choose what the menu bar shows next to the cat: the countdown, the encoder's CPU usage and the hottest core's temperature, in any combination.
 - **Cycle.** **Start automatically** starts the cycle as soon as HandBrake starts working, so a queue launched in a hurry still gets its rests. **Save the activity log to a file** keeps a copy of every log line in `~/Library/Logs/Siesta/Siesta.log`, with a link that shows it in the Finder.
-- **Chart.** Smooth curves, magnetic rest bands for the hover readout, and Hold the chart while idle, described above.
+- **Chart.** Smooth curves, magnetic edges (rest bands and breaks pull the hover readout), and Hold the chart while idle, described above.
 - **Updates.** Check for new releases automatically, install them automatically, or check now.
 
 <a href="Resources/siesta-interface-settings.webp">
@@ -146,7 +146,7 @@ Launching the binary with `--start` starts the cycle immediately with the last s
 
 ## Preferences
 
-Stored in the `io.github.interstellar0verdrive.siesta` defaults domain: `work`, `rest` (minutes), `window` (detached window), `appearance` (`system`, `light` or `dark`), `menuBarItems` (any of `time`, `cpu`, `temp`), `autoStart`, `logFile`, `smoothCurves`, `magneticBands`, `holdChart`, `checkUpdates`, `autoInstall` (all on or off, as in the settings page), and `threshold` (CPU percentage considered "encoding", default 50, not exposed in the UI). Open at login is kept by macOS, in System Settings → General → Login Items.
+Stored in the `io.github.interstellar0verdrive.siesta` defaults domain: `work`, `rest` (minutes), `window` (detached window), `appearance` (`system`, `light` or `dark`), `menuBarItems` (any of `time`, `cpu`, `gpu`, `temp`), `autoStart`, `logFile`, `smoothCurves`, `magneticBands`, `holdChart`, `checkUpdates`, `autoInstall` (all on or off, as in the settings page), and `threshold` (CPU percentage considered "encoding", default 50, not exposed in the UI). Open at login is kept by macOS, in System Settings → General → Login Items.
 
 <br>
 

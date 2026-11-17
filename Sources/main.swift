@@ -375,15 +375,18 @@ final class ChartView: NSView, HandCursorView {
         trackingAreas.forEach(removeTrackingArea)
         addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil))
     }
+    /// The pointer's x over the plot, for the magnetic dotted lines.
+    var hoverX: CGFloat?
     override func mouseMoved(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
+        hoverX = p.x
         hoveredArrow = leftArrowRect.contains(p) ? -1 : rightArrowRect.contains(p) ? 1 : 0
         guard !collapsed, let g = geom, let last = samples.last else { hoverT = nil; return }
         guard p.x >= g.left - 4, p.x <= g.right + 4, p.y >= g.bottom, p.y <= g.top else { hoverT = nil; return }
         guard let t = time(atX: p.x) else { return }
         hoverT = min(t, min(last.t, range.end))
     }
-    override func mouseExited(with event: NSEvent) { hoverT = nil; hoveredArrow = 0 }
+    override func mouseExited(with event: NSEvent) { hoverT = nil; hoverX = nil; hoveredArrow = 0 }
 
     /// Smooth lines when the chart holds more samples than pixels (straight segments when zoomed in).
     var smoothCurves = true
@@ -438,7 +441,7 @@ final class ChartView: NSView, HandCursorView {
         return g.start + Double((p - g.left - shift) / max(1, dataW)) * g.span
     }
 
-    /// Magnetic rest bands: near the edge of a rest band the hover line sticks to the change.
+    /// Magnetic edges: near the edge of a rest band, or a dotted line of a break, the hover line sticks to it.
     var magneticBands = true
     static let magnetPixels: Double = 6
     /// Within `magnetPixels` of a change between work and rest, the sample the hover should show:
@@ -766,7 +769,20 @@ final class ChartView: NSView, HandCursorView {
         strips = cuts.enumerated().map { k, c in (c, ((plotLeft + CGFloat((c - tStart) / w) * dataW + strip * CGFloat(k)) * 2).rounded(.up) / 2) }
         // the sample under the cursor, if any: it takes over the right-hand values and the axis
         // (with magnetic bands, near a band edge: the last sample before the change, the line on the edge)
-        let hover: (sample: Sample, t: TimeInterval)? = hoverT.flatMap { ht in
+        // with magnetic edges, the dotted lines of a break pull the pointer too (they are places on the screen,
+        // not times): the left one shows the last sample before the break, where work stopped; the right one
+        // the first sample after it, where work resumed (before it there is only the stretch cut out)
+        var seamX: CGFloat? = nil
+        var seamHover: (sample: Sample, t: TimeInterval)? = nil
+        if magneticBands, let px = hoverX, hoverT != nil {
+            var best = CGFloat(ChartView.magnetPixels) + 0.01
+            for s in strips {
+                for (lx, smp) in [(s.x0 + 0.5, samples.last { $0.t < s.cut }), (s.x0 + strip - 0.5, samples.first { $0.t >= s.cut })] {
+                    if let smp, abs(px - lx) < best { best = abs(px - lx); seamX = lx; seamHover = (smp, smp.t) }
+                }
+            }
+        }
+        let hover: (sample: Sample, t: TimeInterval)? = seamHover ?? hoverT.flatMap { ht in
             let near = visibleSamples(tStart, tEnd)
             if magneticBands, let snap = ChartView.magnet(near, at: ht, secondsPerPixel: w / Double(dataW)) { return (snap.sample, snap.edge) }
             return near.min { abs($0.t - ht) < abs($1.t - ht) }.flatMap { abs($0.t - ht) < 30 ? ($0, $0.t) : nil }
@@ -901,7 +917,7 @@ final class ChartView: NSView, HandCursorView {
         text(shown.temp.map { "\(Int($0.rounded()))°C" } ?? "n/a", NSPoint(x: bounds.width, y: tempLane.midY), tempColor, .semibold, right: true)
         // hover cursor: solid line and dots at the hovered sample
         if let hv = hovered, let hoverAt = hover?.t {
-            let hx = x(hoverAt)
+            let hx = seamX ?? x(hoverAt)
             let line = NSBezierPath(); line.move(to: NSPoint(x: hx, y: plotsBottom)); line.line(to: NSPoint(x: hx, y: plotsTop))
             line.lineWidth = 1; NSColor.labelColor.withAlphaComponent(0.6).setStroke(); line.stroke()
             func hdot(_ v: Double, lane: NSRect, maxV: Double, minV: Double, _ color: NSColor) {
@@ -915,7 +931,7 @@ final class ChartView: NSView, HandCursorView {
         // time axis: the start time flush left, "Now" at the right, the others spread evenly in between
         let labelCount = min(bounds.width > 420 ? 6 : 4, max(2, Int(w / 60)))   // never closer than a minute
         let f = DateFormatter(); f.dateFormat = w < 120 ? "HH:mm:ss" : "HH:mm"
-        let hx: CGFloat? = hover.map { x($0.t) }
+        let hx: CGFloat? = hover.map { seamX ?? x($0.t) }
         // the right-hand label ("Now", or the time at the right edge) is drawn right aligned 14 pt past its anchor
         let rightText = live ? "Now" : f.string(from: Date(timeIntervalSinceReferenceDate: pending ? last.clock : clock(at: tEnd)))
         let rightLeftEdge = (nowVisible ? nx : plotRight) + 14
@@ -1869,7 +1885,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     var logFileRow: SettingsRow!
     let showLogLink = LinkButton(title: "", target: nil, action: nil)
     let smoothSwitch = ToggleSwitch(label: "Smooth curves")
-    let magnetSwitch = ToggleSwitch(label: "Magnetic rest bands")
+    let magnetSwitch = ToggleSwitch(label: "Magnetic edges")
     let holdSwitch = ToggleSwitch(label: "Hold the chart while idle")
     let checkSwitch = ToggleSwitch(label: "Check for updates automatically")
     let installSwitch = ToggleSwitch(label: "Install updates automatically")
@@ -2839,7 +2855,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         holdSwitch.onToggle = { [weak self] on in self?.defaults.set(on, forKey: "holdChart") }
         let chartGroup = SettingsGroup(title: "Chart", rows: [
             SettingsRow("Smooth curves", control: smoothSwitch),
-            SettingsRow("Magnetic rest bands", control: magnetSwitch),
+            SettingsRow("Magnetic edges", detail: "Rests and breaks pull the pointer", control: magnetSwitch),
             SettingsRow("Hold the chart while idle", detail: "Stops scrolling while \(target.name) is not working", control: holdSwitch),
         ])
 
@@ -3031,11 +3047,12 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
     // The menu bar item is one template image, so macOS tints it like any menu bar icon: the cat,
     // the countdown in the menu bar font, then each reading as Stats shows it — a small caption over
-    // the value, left aligned. Every gap is measured on the ink, not on the boxes: the same space
-    // after the cat and between the items, and after the last one the same margin the cat has on its left.
-    // Each column is as wide as what it shows (digits are monospaced, so it only changes at 10 and 100).
+    // the value, left aligned. Every gap is measured on the ink, not on the boxes: 7 pt after the cat,
+    // 11 pt between the items (as Stats spaces its own), and after the last one the same margin the cat has on its left.
+    // A column keeps room for two digits (the temperature for three), so the item only widens at 100%.
     static let menuBarHeight: CGFloat = 22, catSize: CGFloat = 20
-    static let menuBarGap: CGFloat = 7
+    /// Ink after the cat; between the items (the countdown and each reading) a wider gap, as Stats keeps.
+    static let menuBarGap: CGFloat = 7, menuBarItemGap: CGFloat = 11
     /// Horizontal ink of a line of text, from its drawing origin.
     static func inkX(_ a: NSAttributedString) -> (min: CGFloat, max: CGFloat) {
         let b = CTLineGetBoundsWithOptions(CTLineCreateWithAttributedString(a), .useGlyphPathBounds)
@@ -3078,13 +3095,16 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         for c in columns {
             let v = attr(c.value, valueFont), k = attr(c.caption, captionFont)
             let iv = inkX(v), ik = inkX(k)
-            items.append(([(v, valueFont, 3), (k, captionFont, 14)], (min(iv.min, ik.min), max(iv.max, ik.max))))
+            // a column keeps room for two digits (three for the temperature, which keeps crossing 100° while
+            // encoding), so a reading going from 12% to 9% does not move the cat; only 100% widens it
+            let room = inkX(attr(String(repeating: "8", count: c.caption == "TEMP" ? 3 : 2) + String(c.value.last ?? "%"), valueFont)).max
+            items.append(([(v, valueFont, 3), (k, captionFont, 14)], (min(iv.min, ik.min), max(iv.max, ik.max, room))))
         }
         let catInk = catInk(state, cat)
         var cursor = catInk.max   // right edge of the ink so far
         var origins: [CGFloat] = []
-        for item in items {
-            let x = cursor + menuBarGap - item.ink.min
+        for (n, item) in items.enumerated() {
+            let x = cursor + (n == 0 ? menuBarGap : menuBarItemGap) - item.ink.min
             origins.append(x)
             cursor = x + item.ink.max
         }
@@ -3806,12 +3826,16 @@ if let i = CommandLine.arguments.firstIndex(of: "--debug-hold"), i + 1 < Command
     chart.frame = NSRect(x: 0, y: 0, width: 380, height: chart.fullHeight)
     chart.samples = samples
     chart.holding = CommandLine.arguments.contains("held")
+    // `--debug-hover-x <pt>`: the pointer at that x (`no-magnet`: with magnetic edges off)
+    let hoverAtX = CommandLine.arguments.firstIndex(of: "--debug-hover-x").flatMap { Double(CommandLine.arguments[$0 + 1]) }.map { CGFloat($0) }
+    chart.magneticBands = !CommandLine.arguments.contains("no-magnet")
     let light = CommandLine.arguments.contains("light")
     let appearance = NSAppearance(named: light ? .aqua : .darkAqua)!
     let host = NSWindow(contentRect: chart.frame, styleMask: [.borderless], backing: .buffered, defer: true)
     host.appearance = appearance; host.contentView = chart
     appearance.performAsCurrentDrawingAppearance { chart.cacheDisplay(in: chart.bounds, to: chart.bitmapImageRepForCachingDisplay(in: chart.bounds)!) }
     chart.layoutSubtreeIfNeeded()
+    if let hx = hoverAtX { chart.hoverX = hx; chart.hoverT = chart.time(atX: hx) }
     let rep = chart.bitmapImageRepForCachingDisplay(in: chart.bounds)!
     appearance.performAsCurrentDrawingAppearance { chart.cacheDisplay(in: chart.bounds, to: rep) }
     let image = NSImage(size: chart.bounds.size)
