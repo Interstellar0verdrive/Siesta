@@ -2426,6 +2426,24 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     // MARK: Popover / window
     static let windowFrameName = "SiestaPanel"
 
+    /// The top-left corner of the window's saved frame, if it is still on a screen. Read before the panel goes
+    /// into the window: that resize keeps the bottom edge and, once the frame is autosaved, is saved too.
+    func savedTopLeft() -> NSPoint? {
+        guard let s = UserDefaults.standard.string(forKey: "NSWindow Frame \(App.windowFrameName)") else { return nil }
+        let n = s.split(separator: " ").compactMap { Double($0) }
+        guard n.count >= 4, n[2] > 50, n[3] > 50 else { return nil }   // a real window, not an empty frame
+        let corner = NSPoint(x: n[0], y: n[1] + n[3])
+        guard NSScreen.screens.contains(where: { $0.visibleFrame.insetBy(dx: -1, dy: -1).contains(NSPoint(x: corner.x + 30, y: corner.y - 10)) }) else { return nil }
+        return corner
+    }
+    /// From now on AppKit saves the window's frame as it moves. The current frame first: setting the name
+    /// moves the window to the corner saved under it.
+    func autosaveFrame(_ w: NSWindow) {
+        guard w.frameAutosaveName != App.windowFrameName else { return }
+        w.saveFrame(usingName: App.windowFrameName)
+        w.setFrameAutosaveName(App.windowFrameName)
+    }
+
     /// The detached window, made once: title bar with the button that attaches the panel to the menu bar again.
     func detachedWindow() -> NSWindow {
         if let w = window { return w }
@@ -2446,7 +2464,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         accessory.view = holder
         accessory.layoutAttribute = .trailing
         w.addTitlebarAccessoryViewController(accessory)
-        w.setFrameAutosaveName(App.windowFrameName)   // reopens where it was left
+        // no autosave name yet: set on this still empty window it moved it to a wrong spot and saved the empty
+        // frame, which was then read back (showPanel places the window, then turns the autosave on)
         window = w
         return w
     }
@@ -2599,6 +2618,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         detaching = false; layoutPanel(); detaching = true   // the window's own size, now that the panel is in it
         let size = panelController.view.fittingSize
         w.setFrame(w.frameRect(forContentRect: NSRect(x: panelRect.minX, y: panelRect.maxY - size.height.rounded(), width: size.width.rounded(), height: size.height.rounded())), display: true)
+        autosaveFrame(w)   // where the drag left it
         w.alphaValue = 0
         NSApp.activate(ignoringOtherApps: true)
         w.makeKeyAndOrderFront(nil)
@@ -2675,9 +2695,13 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             if popover.isShown { popover.performClose(nil) }
             popover.contentViewController = nil
             let w = detachedWindow()
+            let corner = w.isVisible ? nil : savedTopLeft()   // where it was left, read before the panel resizes it
             w.contentViewController = panelController
             layoutPanel()
-            if !w.isVisible && !w.setFrameUsingName(App.windowFrameName) { w.center() }
+            if !w.isVisible {
+                if let corner { w.setFrameTopLeftPoint(corner) } else { w.center() }   // its own size, its old place
+                autosaveFrame(w)
+            }
             if !CommandLine.arguments.contains("--no-activate") { NSApp.activate(ignoringOtherApps: true) }   // tests stay in the background
             window!.makeKeyAndOrderFront(nil)
             DispatchQueue.main.async { [weak self] in self?.window?.makeFirstResponder(nil) }
