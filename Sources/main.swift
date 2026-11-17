@@ -2028,10 +2028,10 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         guard let i = CommandLine.arguments.firstIndex(of: "--debug-scene") else { return }
         let out = URL(fileURLWithPath: CommandLine.arguments[i + 2])
         refresh()   // the stopped state first, as at launch: starting the cycle then reveals the chart
-        if name == "settings" {   // the settings page with the pointer on the back button, as on the board
+        if name == "settings" {   // the settings page; `--debug-hover` puts the pointer on the back button, as on the board
             lastCheck = (Calendar.current.date(bySettingHour: 17, minute: 12, second: 0, of: Date())!, "ok")
             showSettings(true, animated: false)
-            backButton.showHover()
+            if CommandLine.arguments.contains("--debug-hover") { backButton.showHover() }
             layoutPanel()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self.renderPanel(to: out) }
             return

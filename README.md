@@ -46,7 +46,7 @@ It changes to show whether the cycle is stopped, HandBrake is encoding, taking a
 ## The panel
 #### Everything Siesta knows, one click away.
 
-Clicking the menu bar icon opens a popover with the current state and a countdown to the next change, a thin progress line for the running interval, the Work and Rest minutes, the Start/Stop cycle button, a collapsible activity log and a Quit button. "Next pause at" and "Resumes at" show exact times, because pauses start on a whole minute and rests last exactly the minutes you set.
+Clicking the menu bar icon opens a popover with the current state and a countdown to the next change, a thin progress line for the running interval, the Work and Rest minutes, the Start/Stop cycle button, a collapsible activity log, a gear that opens the settings and a Quit button. "Next pause at" and "Resumes at" show exact times, because pauses start on a whole minute and rests last exactly the minutes you set.
 
 You can change Work and Rest while the cycle runs: the new value applies as soon as you confirm it with Return, Tab or a click elsewhere, and the change appears in the activity log. In the two fields, the ↑ and ↓ keys step the value by one minute, by ten with Shift. **Stop cycle** stops Siesta's cycle, never the encoder.
 
@@ -63,6 +63,8 @@ Expand **CPU & temperature** to see the recent history. The blue line is the enc
 
 The chart starts with a five-minute view, grows with the session, and then keeps a rolling six-hour history. Hovering over the plot shows the readings and the time of that moment; near the edge of a rest band the readout snaps to the moment the rest began or ended. When there are more readings than pixels the lines are drawn as smooth curves, never across the start or end of a rest. Pinch on the trackpad or use the mouse wheel over the plot to zoom around the cursor, down to one minute and never beyond the recorded history. Scroll sideways with two fingers, or drag the plot, to move back and forth in time; a chevron at the right edge means newer data is waiting and clicking it jumps back to now, while the one at the left edge jumps to the start of the history, both keeping the current zoom. The legend at the top right always shows how much time the view spans; after zooming or moving, a small reload icon next to it, or a double-click on the plot, returns to the automatic view.
 
+Siesta keeps recording while the cycle is stopped, so the chart also shows what HandBrake did before you pressed Start. With **Hold the chart while idle** turned on in the settings, the stretches in which HandBrake is not working are cut out instead: the chart stops scrolling, and when the work resumes two dotted lines with a narrow gap between them mark the cut. The time axis and the hover readout keep showing the real time on both sides.
+
 Collapse the chart with the chevron next to its title and the header keeps showing the current CPU and temperature readings, as in the compact view above, just the current readings. Siesta remembers whether you left the chart and the log open or closed.
 
 <a href="Resources/siesta-interface-expanded.webp">
@@ -78,6 +80,22 @@ Turn on **Detached window** to keep Siesta open as a regular window that floats 
 
 <a href="Resources/siesta-interface-detached.webp">
   <img src="Resources/siesta-interface-detached.webp" alt="Detached Siesta window in light and dark mode during a five-minute rest, with current CPU and temperature readings and the expanded activity log">
+</a>
+
+<br>
+
+## Settings
+#### A few choices, one click from the panel.
+
+The gear next to the version number slides the panel over to the settings page; the back chevron or Esc slides it back. Every change applies at once.
+
+- **General.** Open Siesta at login, follow the system appearance or force light or dark, and choose what the menu bar shows next to the cat: the countdown, the encoder's CPU usage and the hottest core's temperature, in any combination.
+- **Cycle.** **Start automatically** starts the cycle as soon as HandBrake starts working, so a queue launched in a hurry still gets its rests. **Save the activity log to a file** keeps a copy of every log line in `~/Library/Logs/Siesta/Siesta.log`, with a link that shows it in the Finder.
+- **Chart.** Smooth curves, magnetic rest bands for the hover readout, and Hold the chart while idle, described above.
+- **Updates.** Check for new releases automatically, install them automatically, or check now.
+
+<a href="Resources/siesta-interface-settings.webp">
+  <img src="Resources/siesta-interface-settings.webp" alt="The Siesta settings page in light and dark mode, with the General, Cycle, Chart and Updates groups">
 </a>
 
 <br>
@@ -104,9 +122,11 @@ xattr -d com.apple.quarantine /Applications/Siesta.app
 
 ## Updates
 
-The current version is shown in small print next to the Quit button, with a **?** button that opens this page. While Siesta is running it asks GitHub for the latest release at launch and then every six hours; nothing runs while the app is closed.
+The current version is shown in small print next to the Quit button, and again in the settings, where a link at the bottom opens this page. While Siesta is running it asks GitHub for the latest release at launch and then every six hours; nothing runs while the app is closed. **Check now** in the settings asks at once, and turning off **Check for updates automatically** stops the checks at launch and every six hours.
 
 When a newer release exists a yellow **Update to x.y.z** chip appears at the top of the panel, and only then. Clicking it downloads the release archive, verifies its SHA-256 checksum against the one published with the release, replaces the app in place (the old copy goes to the Trash) and relaunches. Because the new bundle is written by Siesta itself it carries no quarantine flag, so macOS does not ask for approval again: only the very first installation needs it. If the app lives in a folder Siesta cannot write to, or anything goes wrong, the chip simply opens the release page instead.
+
+With **Install updates automatically** turned on, Siesta does all of this by itself as soon as it finds a new release. It never interrupts a running cycle: if one is running, the update waits until you stop it.
 
 <br>
 
@@ -126,7 +146,7 @@ Launching the binary with `--start` starts the cycle immediately with the last s
 
 ## Preferences
 
-Stored in the `io.github.interstellar0verdrive.siesta` defaults domain: `work`, `rest` (minutes), `window` (detached window), `threshold` (CPU percentage considered "encoding", default 50, not exposed in the UI).
+Stored in the `io.github.interstellar0verdrive.siesta` defaults domain: `work`, `rest` (minutes), `window` (detached window), `appearance` (`system`, `light` or `dark`), `menuBarItems` (any of `time`, `cpu`, `temp`), `autoStart`, `logFile`, `smoothCurves`, `magneticBands`, `holdChart`, `checkUpdates`, `autoInstall` (all on or off, as in the settings page), and `threshold` (CPU percentage considered "encoding", default 50, not exposed in the UI). Open at login is kept by macOS, in System Settings → General → Login Items.
 
 <br>
 
@@ -150,7 +170,7 @@ A few things I would like Siesta to do, in no particular order and with no dates
 - **GPU in the chart.** Alongside CPU and temperature, where it says something meaningful about the encode.
 - **A thermal mode.** Rest when the chip has been above a chosen temperature for a while, instead of after a fixed number of minutes.
 
-Smaller refinements, such as a preferences page, will arrive along the way.
+Smaller refinements will arrive along the way.
 
 <br>
 
