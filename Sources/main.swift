@@ -26,7 +26,12 @@ struct Target {
 let target = Target(name: "HandBrake", bundleMarker: "HandBrake.app/", workerMarker: "XPCServices/HandBrakeXPCService")
 
 let popoverWidth: CGFloat = 380
-let windowWidth: CGFloat = 455
+/// `--debug-window-width <pt>`: renders the detached window at another width (boards for the detach animation).
+let windowWidth: CGFloat = {
+    if let i = CommandLine.arguments.firstIndex(of: "--debug-window-width"), i + 1 < CommandLine.arguments.count,
+       let w = Double(CommandLine.arguments[i + 1]) { return CGFloat(w) }
+    return 455
+}()
 
 // MARK: - Temperature (hottest CPU core)
 // Apple Silicon has no public API for core temperatures. The first source is the SMC, through
@@ -1826,7 +1831,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let d = UserDefaults(suiteName: name)!
         d.removePersistentDomain(forName: name)
         d.set(30, forKey: "work"); d.set(5, forKey: "rest")
-        d.set(scene == "resting", forKey: "window")
+        d.set(scene == "resting" || CommandLine.arguments.contains("--debug-window"), forKey: "window")   // `--debug-window`: any scene in the detached window
         d.set(scene != "working", forKey: "chartCollapsed")
         d.set(scene == "resting", forKey: "logExpanded")
         if scene == "settings" { d.set(["time"], forKey: "menuBarItems") }
