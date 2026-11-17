@@ -1758,7 +1758,10 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     var workField: NSTextField { workBox.field }
     var restField: NSTextField { restBox.field }
     let runButton = FlatButton(title: "Start cycle", primary: true)
-    let detachCheckbox = StyledCheckbox(title: "Detached window")
+    let panelModePicker = SegmentedPicker(items: ["Popover", "Window"], label: "Open the panel as")
+    let attachButton = HoverIconButton(symbol: "menubar.arrow.up.rectangle", pointSize: 13, label: "Attach to the menu bar", weight: .regular)
+    /// True while the panel travels between the popover and the window (drag to detach, attach button).
+    var detaching = false
     let logBox = LogBoxView()
     let versionLabel = NSTextField(labelWithString: "")
     let settingsButton = HoverIconButton(symbol: "gearshape", pointSize: 14, label: "Settings", weight: .regular)
@@ -1893,13 +1896,13 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         restField.integerValue = r == 0 ? 5 : r
         committedWork = workField.integerValue
         committedRest = restField.integerValue
-        detachCheckbox.isOn = detached
         logExpanded = defaults.bool(forKey: "logExpanded")   // collapsed the first time, then as last left
         if let scene = App.scene { stageScene(scene); return }   // no timer, no rescue of frozen workers, no network
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
         rescueFrozen()
         installSignalHandlers()
         installPopoverGlide()
+        installDetachDrag()
         installSettingsKeys()
         if let i = CommandLine.arguments.firstIndex(of: "--debug-update"), i + 1 < CommandLine.arguments.count {
             // shows the update chip for a made-up version without asking GitHub; "busy" shows it updating
@@ -1950,6 +1953,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             return nil
         }
         NotificationCenter.default.addObserver(forName: NSPopover.didCloseNotification, object: popover, queue: .main) { [weak self] _ in
+            guard self?.detaching != true else { return }   // dragged out into the window: the page stays as it is
             self?.showSettings(false, animated: false)
         }
     }
@@ -2177,7 +2181,6 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             runButton.heightAnchor.constraint(equalTo: grid.heightAnchor),
             runButton.widthAnchor.constraint(equalTo: settings.widthAnchor, multiplier: 0.5, constant: -12),
         ])
-        detachCheckbox.onToggle = { [weak self] in self?.toggleDetached() }
 
         // Activity log box
         logBox.onToggle = { [weak self] in self?.toggleLog() }
@@ -2198,7 +2201,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         settingsButton.restColor = .secondaryLabelColor   // lighter than the version: the version stays a detail
         settingsButton.target = self; settingsButton.action = #selector(openSettings)
         settingsButton.setContentHuggingPriority(.required, for: .horizontal)
-        let footer = NSStackView(views: [detachCheckbox, NSView(), versionLabel, settingsButton, quitButton])
+        let footer = NSStackView(views: [NSView(), versionLabel, settingsButton, quitButton])
         footer.orientation = .horizontal; footer.alignment = .centerY
         footer.setCustomSpacing(App.versionToGear, after: versionLabel)
         footer.setCustomSpacing(App.gearToQuit, after: settingsButton)
@@ -2208,7 +2211,6 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         chipRow.orientation = .horizontal; chipRow.alignment = .centerY
         chipRow.isHidden = true
         updateRow = chipRow
-        detachCheckbox.setContentCompressionResistancePriority(.required, for: .horizontal)   // never truncate the label
         // Tab order: Work → Rest → Start/Stop → Quit → Work
         workField.nextKeyView = restField
         restField.nextKeyView = runButton
@@ -2293,6 +2295,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         logBox.expanded = logExpanded
         if logAnimation == nil { logBox.reveal = logExpanded ? 1 : 0 }
         logBox.count.stringValue = logCount == 0 ? "No events yet" : "\(logCount) event\(logCount == 1 ? "" : "s")"
+        guard !detaching else { return }   // the drag or the attach animation sizes the panel itself
         panelWidth.constant = detached ? windowWidth : popoverWidth
         panelController.view.layoutSubtreeIfNeeded()
         // the container sizes the view: never set its frame by hand. Whole points only: with fractional
@@ -2315,6 +2318,246 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     }
 
     // MARK: Popover / window
+    static let windowFrameName = "SiestaPanel"
+
+    /// The detached window, made once: title bar with the button that attaches the panel to the menu bar again.
+    func detachedWindow() -> NSWindow {
+        if let w = window { return w }
+        let w = NSWindow(contentRect: .zero, styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        w.title = "Siesta"
+        w.isReleasedWhenClosed = false
+        w.autorecalculatesKeyViewLoop = false
+        w.level = .floating          // stays visible above other apps' windows
+        attachButton.target = self; attachButton.action = #selector(attachToMenuBar)
+        attachButton.translatesAutoresizingMaskIntoConstraints = false
+        let holder = NSView(frame: NSRect(x: 0, y: 0, width: 34, height: 28))
+        holder.addSubview(attachButton)
+        NSLayoutConstraint.activate([
+            attachButton.centerYAnchor.constraint(equalTo: holder.centerYAnchor),
+            attachButton.trailingAnchor.constraint(equalTo: holder.trailingAnchor, constant: -10),
+        ])
+        let accessory = NSTitlebarAccessoryViewController()
+        accessory.view = holder
+        accessory.layoutAttribute = .trailing
+        w.addTitlebarAccessoryViewController(accessory)
+        w.setFrameAutosaveName(App.windowFrameName)   // reopens where it was left
+        window = w
+        return w
+    }
+
+    /// Steps an animation at 60 Hz in every run loop mode (also while a menu or a drag is tracking).
+    func animate(duration: TimeInterval, step: @escaping (CGFloat) -> Void, done: @escaping () -> Void) {
+        if duration <= 0 { step(1); done(); return }
+        let start = Date()
+        let t = Timer(timeInterval: 1.0 / 60, repeats: true) { timer in
+            let p = min(1, CGFloat(Date().timeIntervalSince(start) / duration))
+            step(p)
+            if p >= 1 { timer.invalidate(); done() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+    }
+    var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+
+    /// Where the popover's panel sits relative to the cat: measured each time the popover opens,
+    /// so the attach animation lands exactly where the popover will appear.
+    var popoverGap: CGFloat = 13.5, popoverDX: CGFloat = 0
+    func measurePopoverPlacement() {
+        guard let pw = popoverWindow, let button = statusItem.button, let bw = button.window else { return }
+        let view = panelController.view
+        let body = pw.convertToScreen(view.convert(view.bounds, to: nil))
+        let anchor = bw.convertToScreen(button.convert(iconAnchor(), to: nil))
+        popoverGap = anchor.minY - body.maxY
+        popoverDX = body.midX - anchor.midX
+        debugPrint("POPOVER gap \(popoverGap) dx \(popoverDX)")
+    }
+
+    /// A borderless, shadowed stand-in that carries the panel between the popover and the window.
+    /// Its background is the window's, with the popover's material over it at `popoverLook` (0…1):
+    /// fading that layer moves the colour from one container to the other without a jump.
+    func makeLift(_ frame: NSRect, popoverLook: CGFloat) -> (NSPanel, NSVisualEffectView, NSVisualEffectView) {
+        let lift = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        lift.isOpaque = false; lift.backgroundColor = .clear; lift.hasShadow = true
+        lift.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 1)   // above the popover at the hand-over
+        lift.appearance = NSApp.appearance
+        let fx = NSVisualEffectView(frame: NSRect(origin: .zero, size: frame.size))
+        fx.material = .windowBackground; fx.blendingMode = .behindWindow; fx.state = .active
+        fx.wantsLayer = true; fx.layer?.cornerRadius = 10; fx.layer?.masksToBounds = true
+        fx.autoresizingMask = [.width, .height]
+        let look = NSVisualEffectView(frame: fx.bounds)
+        look.material = .popover; look.blendingMode = .behindWindow; look.state = .active
+        look.autoresizingMask = [.width, .height]
+        look.alphaValue = popoverLook
+        fx.addSubview(look)
+        lift.contentView = fx
+        return (lift, fx, look)
+    }
+
+    /// A picture of the panel laid over it, so the panel itself can move to another container unseen.
+    func coverWithSnapshot(_ fx: NSView) {
+        let view = panelController.view
+        let snapshot = NSImageView(frame: fx.bounds)
+        snapshot.autoresizingMask = [.width, .height]
+        if let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+            view.cacheDisplay(in: view.bounds, to: rep)
+            let image = NSImage(size: view.bounds.size); image.addRepresentation(rep); snapshot.image = image
+        }
+        fx.addSubview(snapshot)
+    }
+
+    // MARK: Drag the popover out into a window
+    // A drag that starts on the panel's background (the status, the gaps between the blocks; never on a
+    // control, the chart or the log) lifts the panel out of the popover; it widens to the window's width
+    // while it follows the pointer, and where the button comes up it becomes the detached window.
+    func installDetachDrag() {
+        NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+            guard let self = self, !self.detached, !self.detaching, self.popover.isShown,
+                  let pw = self.popoverWindow, event.window === pw, self.isDragHandle(event) else { return event }
+            pw.makeFirstResponder(nil)   // what a click on the background does
+            self.trackDetachDrag()
+            return nil
+        }
+    }
+
+    func isDragHandle(_ event: NSEvent) -> Bool {
+        guard let content = event.window?.contentView else { return false }
+        var v = content.hitTest(content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow)
+        while let view = v {
+            if view is ChartView || view is LogBoxView || view is NSTextView || view is NSScrollView { return false }
+            if let field = view as? NSTextField {
+                if field.isEditable || field.isSelectable { return false }
+            } else if view is NSControl { return false }
+            if let h = view as? HandCursorView, h.wantsHandCursor(at: view.convert(event.locationInWindow, from: nil)) { return false }
+            if view === panelController.view { return true }
+            v = view.superview
+        }
+        return false
+    }
+
+    func trackDetachDrag() {
+        guard let pw = popoverWindow else { return }
+        let start = NSEvent.mouseLocation
+        // a click, or a few points of jitter, leaves the popover where it is
+        while true {
+            guard let e = NSApp.nextEvent(matching: [.leftMouseDragged, .leftMouseUp], until: .distantFuture, inMode: .eventTracking, dequeue: true) else { continue }
+            if e.type == .leftMouseUp { return }
+            let p = NSEvent.mouseLocation
+            if hypot(p.x - start.x, p.y - start.y) >= 4 { break }
+        }
+        detaching = true
+        let view = panelController.view
+        let body = pw.convertToScreen(view.convert(view.bounds, to: nil))
+        // the grab point as a share of the width (the panel widens around it) and a distance from the top
+        let grab = NSPoint(x: (start.x - body.minX) / body.width, y: body.maxY - start.y)
+        measurePopoverPlacement()
+        let (lift, fx, look) = makeLift(body, popoverLook: 1)
+        pw.alphaValue = 0                 // the popover stays open underneath until the drop, so the drag keeps its events
+        view.frame = fx.bounds
+        fx.addSubview(view)
+        func place(_ width: CGFloat) {
+            panelWidth.constant = width
+            view.layoutSubtreeIfNeeded()
+            let h = view.fittingSize.height.rounded()
+            let m = NSEvent.mouseLocation
+            lift.setFrame(NSRect(x: (m.x - grab.x * width).rounded(), y: (m.y + grab.y - h).rounded(), width: width, height: h), display: true)
+            view.frame = fx.bounds
+            look.alphaValue = 1 - (width - popoverWidth) / (windowWidth - popoverWidth)
+        }
+        place(popoverWidth)
+        lift.orderFront(nil)
+        let t0 = Date(), duration: TimeInterval = reduceMotion ? 0 : 0.26
+        func width() -> CGFloat {
+            let p = duration == 0 ? 1 : min(1, Date().timeIntervalSince(t0) / duration)
+            return popoverWidth + (windowWidth - popoverWidth) * CGFloat(1 - pow(1 - p, 3))   // ease out
+        }
+        while true {
+            let e = NSApp.nextEvent(matching: [.leftMouseDragged, .leftMouseUp], until: Date(timeIntervalSinceNow: 1.0 / 60), inMode: .eventTracking, dequeue: true)
+            place(width())
+            if e?.type == .leftMouseUp { break }
+        }
+        // released before the panel reached its width: finish the widening in place
+        while Date().timeIntervalSince(t0) < duration {
+            RunLoop.current.run(mode: .eventTracking, before: Date(timeIntervalSinceNow: 1.0 / 60))
+            place(width())
+        }
+        place(windowWidth)
+        // the window takes over: its title bar appears above the panel, which stays where it was dropped
+        coverWithSnapshot(fx)
+        let panelRect = lift.frame
+        popover.animates = false; popover.close(); popover.animates = true
+        popover.contentViewController = nil
+        pw.alphaValue = 1
+        defaults.set(true, forKey: "window")
+        panelModePicker.select(1)
+        let w = detachedWindow()
+        w.contentViewController = panelController
+        detaching = false; layoutPanel(); detaching = true   // the window's own size, now that the panel is in it
+        let size = panelController.view.fittingSize
+        w.setFrame(w.frameRect(forContentRect: NSRect(x: panelRect.minX, y: panelRect.maxY - size.height.rounded(), width: size.width.rounded(), height: size.height.rounded())), display: true)
+        w.alphaValue = 0
+        NSApp.activate(ignoringOtherApps: true)
+        w.makeKeyAndOrderFront(nil)
+        w.makeFirstResponder(nil)
+        animate(duration: reduceMotion ? 0.15 : 0.18, step: { p in w.alphaValue = p }, done: { [weak self] in
+            lift.orderOut(nil)
+            self?.detaching = false
+        })
+    }
+
+    /// The title bar button: the panel leaves the window (its title bar fades), narrows and glides up to
+    /// exactly where the popover will be, and the popover takes over with a short crossfade: only its arrow appears.
+    @objc func attachToMenuBar() {
+        guard detached, !detaching, let w = window, let button = statusItem.button, let bw = button.window else { return }
+        detaching = true
+        let view = panelController.view
+        let saved = w.frame
+        let from = w.contentRect(forFrameRect: w.frame)
+        let (lift, fx, look) = makeLift(from, popoverLook: 0)
+        // a picture of the panel goes up first, exactly over it; only then the panel itself moves into the stand-in
+        coverWithSnapshot(fx)
+        lift.orderFront(nil)
+        lift.display()
+        let picture = fx.subviews.last
+        view.frame = fx.bounds
+        fx.addSubview(view)                // out of the window: the empty window only shows its fading title bar
+        picture?.removeFromSuperview()
+        let anchor = bw.convertToScreen(button.convert(iconAnchor(), to: nil))
+        let toTop = anchor.minY - popoverGap, toMidX = anchor.midX + popoverDX
+        animate(duration: reduceMotion ? 0 : 0.28, step: { [weak self] p in
+            guard let self = self else { return }
+            let e = p < 0.5 ? 2 * p * p : 1 - pow(-2 * p + 2, 2) / 2
+            let width = (windowWidth + (popoverWidth - windowWidth) * e).rounded()
+            self.panelWidth.constant = width
+            view.layoutSubtreeIfNeeded()
+            let h = view.fittingSize.height.rounded()
+            let midX = from.midX + (toMidX - from.midX) * e
+            let top = from.maxY + (toTop - from.maxY) * e
+            lift.setFrame(NSRect(x: (midX - width / 2).rounded(), y: (top - h).rounded(), width: width, height: h), display: true)
+            view.frame = fx.bounds
+            look.alphaValue = e
+            w.alphaValue = max(0, 1 - p / 0.3)
+        }, done: { [weak self] in
+            guard let self = self else { return }
+            w.orderOut(nil)
+            w.alphaValue = 1
+            w.setFrame(saved, display: false)      // next time the window opens where it was
+            w.saveFrame(usingName: App.windowFrameName)
+            self.defaults.set(false, forKey: "window")
+            self.panelModePicker.select(0)
+            self.coverWithSnapshot(fx)
+            let animates = self.popover.animates
+            self.popover.animates = false
+            self.detaching = false
+            self.showPanel()                       // the popover opens under the stand-in, identical: only its arrow shows
+            self.detaching = true
+            self.popover.animates = animates
+            self.animate(duration: 0.1, step: { p in lift.alphaValue = 1 - p }, done: { [weak self] in
+                lift.orderOut(nil)
+                self?.detaching = false
+                self?.measurePopoverPlacement()
+            })
+        })
+    }
+
     @objc func statusItemClicked() {
         if detached { showPanel() }
         else if popover.isShown { popover.performClose(nil) }
@@ -2325,17 +2568,10 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         if detached {
             if popover.isShown { popover.performClose(nil) }
             popover.contentViewController = nil
-            if window == nil {
-                let w = NSWindow(contentRect: .zero, styleMask: [.titled, .closable], backing: .buffered, defer: false)
-                w.title = "Siesta"
-                w.isReleasedWhenClosed = false
-                w.autorecalculatesKeyViewLoop = false
-                w.level = .floating          // stays visible above other apps' windows
-                window = w
-            }
-            window!.contentViewController = panelController
+            let w = detachedWindow()
+            w.contentViewController = panelController
             layoutPanel()
-            if !window!.isVisible { window!.center() }
+            if !w.isVisible && !w.setFrameUsingName(App.windowFrameName) { w.center() }
             if !CommandLine.arguments.contains("--no-activate") { NSApp.activate(ignoringOtherApps: true) }   // tests stay in the background
             window!.makeKeyAndOrderFront(nil)
             DispatchQueue.main.async { [weak self] in self?.window?.makeFirstResponder(nil) }
@@ -2351,6 +2587,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             lastPopoverFrame = .zero
             popover.show(relativeTo: iconAnchor(), of: button, preferredEdge: .minY)
             lastPopoverFrame = popoverWindow?.frame ?? .zero
+            measurePopoverPlacement()
             DispatchQueue.main.async { [weak self] in
                 self?.panelController.view.window?.autorecalculatesKeyViewLoop = false
                 self?.panelController.view.window?.makeFirstResponder(nil)
@@ -2397,9 +2634,11 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         }
     }
 
-    @objc func toggleDetached() {
-        let on = detachCheckbox.isOn
+    /// Popover or window, from the settings: the stored choice is also how the panel opens next time.
+    func setDetached(_ on: Bool) {
+        guard on != detached, !detaching else { return }
         defaults.set(on, forKey: "window")
+        panelModePicker.select(on ? 1 : 0)
         showPanel()
     }
 
@@ -2466,6 +2705,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         head.heightAnchor.constraint(equalToConstant: 34).isActive = true   // as tall as the status row
 
         loginSwitch.onToggle = { [weak self] on in self?.setOpenAtLogin(on) }
+        panelModePicker.onChange = { [weak self] i in self?.setDetached(i == 1) }
         appearancePicker.onChange = { [weak self] i in
             self?.defaults.set(["system", "light", "dark"][i], forKey: "appearance")
             self?.applyAppearance()
@@ -2486,6 +2726,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let general = SettingsGroup(title: "General", rows: [
             SettingsRow("Open at login", control: loginSwitch),
             SettingsRow("Appearance", control: appearancePicker),
+            SettingsRow("Open the panel as", control: panelModePicker),
             menuBarRow,
         ])
 
@@ -2571,6 +2812,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     func syncSettings() {
         if App.scene == nil { loginSwitch.setOn(SMAppService.mainApp.status == .enabled, animated: false) }
         appearancePicker.select(["system", "light", "dark"].firstIndex(of: appearanceChoice) ?? 0)
+        panelModePicker.select(detached ? 1 : 0)
         for (key, chip) in menuBarChips { chip.setOn(menuBarItems.contains(key)) }
         updateMenuBarRow()
         autoStartSwitch.setOn(flag("autoStart", false), animated: false)

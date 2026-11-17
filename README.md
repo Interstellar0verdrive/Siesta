@@ -76,7 +76,7 @@ Collapse the chart with the chevron next to its title and the header keeps showi
 ## A window when you need one
 #### Detach the panel and open the activity log.
 
-Turn on **Detached window** to keep Siesta open as a regular window that floats above your other apps, handy when you want to keep an eye on a long queue without reopening the popover. It holds exactly the same panel, with a little more room for the activity log. Here the chart is collapsed and **Activity log** is expanded, showing recent pauses and resumes. Uncheck Detached window to return to the menu bar popover.
+Drag the popover by its header, or by any empty spot between its blocks, and it lifts off the menu bar: it widens as it follows the pointer and, where you let go, becomes a regular window that floats above your other apps, handy when you want to keep an eye on a long queue without reopening the popover. It holds exactly the same panel, with a little more room for the activity log, and it reopens where you left it. Here the chart is collapsed and **Activity log** is expanded, showing recent pauses and resumes. The button at the right of the title bar takes the panel back to the menu bar, and **Open the panel as** in the settings chooses which of the two the cat opens.
 
 <a href="Resources/siesta-interface-detached.webp">
   <img src="Resources/siesta-interface-detached.webp" alt="Detached Siesta window in light and dark mode during a five-minute rest, with current CPU and temperature readings and the expanded activity log">
@@ -89,7 +89,7 @@ Turn on **Detached window** to keep Siesta open as a regular window that floats 
 
 The gear next to the version number slides the panel over to the settings page; the back chevron or Esc slides it back. Every change applies at once.
 
-- **General.** Open Siesta at login, follow the system appearance or force light or dark, and choose what the menu bar shows next to the cat: the countdown, the encoder's CPU usage and the hottest core's temperature, in any combination.
+- **General.** Open Siesta at login, follow the system appearance or force light or dark, open the panel as a popover or as a window, and choose what the menu bar shows next to the cat: the countdown, the encoder's CPU usage and the hottest core's temperature, in any combination.
 - **Cycle.** **Start automatically** starts the cycle as soon as HandBrake starts working, so a queue launched in a hurry still gets its rests. **Save the activity log to a file** keeps a copy of every log line in `~/Library/Logs/Siesta/Siesta.log`, with a link that shows it in the Finder.
 - **Chart.** Smooth curves, magnetic rest bands for the hover readout, and Hold the chart while idle, described above.
 - **Updates.** Check for new releases automatically, install them automatically, or check now.
