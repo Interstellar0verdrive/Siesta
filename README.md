@@ -15,7 +15,7 @@ Siesta counts the minutes the encoder has **actually** been working, then pauses
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="Resources/siesta-hero-dark.webp">
   <source media="(prefers-color-scheme: light)" srcset="Resources/siesta-hero-light.webp">
-  <img src="Resources/siesta-hero-dark.webp" alt="Siesta in the macOS menu bar: HandBrake is working, with 12 minutes until the next pause, 18 of 30 work minutes elapsed, and recent CPU and temperature history">
+  <img src="Resources/siesta-hero-dark.webp" alt="Siesta in the macOS menu bar: HandBrake is working, with 12 minutes until the next pause, 18 of 30 work minutes elapsed, and recent CPU, GPU and temperature history">
 </picture>
 
 <br>
@@ -51,24 +51,26 @@ Clicking the menu bar icon opens a popover with the current state and a countdow
 You can change Work and Rest while the cycle runs: the new value applies as soon as you confirm it with Return, Tab or a click elsewhere, and the change appears in the activity log. In the two fields, the ↑ and ↓ keys step the value by one minute, by ten with Shift. **Stop cycle** stops Siesta's cycle, never the encoder.
 
 <a href="Resources/siesta-interface-compact.webp">
-  <img src="Resources/siesta-interface-compact.webp" alt="Compact Siesta popover in light and dark mode, with the graph collapsed to live CPU and temperature readings">
+  <img src="Resources/siesta-interface-compact.webp" alt="Compact Siesta popover in light and dark mode, with the graph collapsed to live CPU, GPU and temperature readings">
 </a>
 
 <br>
 
 ## See the cycle unfold
-#### Open the graph to follow CPU load, temperature and scheduled rests.
+#### Open the graph to follow CPU and GPU load, temperature and scheduled rests.
 
-Expand **CPU & temperature** to see the recent history. The blue line is the encoder's CPU usage as a share of the whole Mac, from 0% to 100%; the orange line is the hottest CPU core. The shaded bands mark scheduled rests: CPU usage falls while the worker is paused, and the temperature line shows how the Mac responds.
+Expand **CPU, GPU & temperature** to see the recent history. The blue line is the encoder's CPU usage as a share of the whole Mac, from 0% to 100%; the green line is the GPU usage of the whole Mac, as the graphics driver reports it; the orange line is the hottest CPU core. The shaded bands mark scheduled rests: CPU usage falls while the worker is paused, and the temperature line shows how the Mac responds.
 
-The chart starts with a five-minute view, grows with the session, and then keeps a rolling six-hour history. Hovering over the plot shows the readings and the time of that moment; near the edge of a rest band the readout snaps to the moment the rest began or ended. When there are more readings than pixels the lines are drawn as smooth curves, never across the start or end of a rest. Pinch on the trackpad or use the mouse wheel over the plot to zoom around the cursor, down to one minute and never beyond the recorded history. Scroll sideways with two fingers, or drag the plot, to move back and forth in time; a chevron at the right edge means newer data is waiting and clicking it jumps back to now, while the one at the left edge jumps to the start of the history, both keeping the current zoom. The legend at the top right always shows how much time the view spans; after zooming or moving, a small reload icon next to it, or a double-click on the plot, returns to the automatic view.
+The GPU line covers every app, not just HandBrake, so it never drops to zero: the desktop alone keeps it around 10–15%. HandBrake's software encoders (x264, x265, SVT-AV1) run on the CPU and leave it there, and so do the VideoToolbox encoders, which use the Mac's dedicated media engine; macOS does not report that engine's load without administrator rights. The line climbs when HandBrake runs its filters on the GPU, as it does with a VideoToolbox encoder and hardware decoding: in my tests, scaling, deinterlacing and rotating a 1080p file kept the GPU near 80%.
+
+The chart starts with a five-minute view, grows with the session, and then keeps a rolling six-hour history. Hovering over the plot shows the readings and the time of that moment; near the edge of a rest band the readout snaps to the moment the rest began or ended, and near the dotted lines of a cut (see below) to the moment work stopped or resumed. When there are more readings than pixels the lines are drawn as smooth curves, never across the start or end of a rest. Pinch on the trackpad or use the mouse wheel over the plot to zoom around the cursor, down to one minute and never beyond the recorded history. Scroll sideways with two fingers, or drag the plot, to move back and forth in time; a chevron at the right edge means newer data is waiting and clicking it jumps back to now, while the one at the left edge jumps to the start of the history, both keeping the current zoom. The legend at the top right always shows how much time the view spans; after zooming or moving, a small reload icon next to it, or a double-click on the plot, returns to the automatic view.
 
 Siesta keeps recording while the cycle is stopped, so the chart also shows what HandBrake did before you pressed Start. With **Hold the chart while idle** turned on in the settings, the stretches in which HandBrake is not working are cut out instead: the chart stops scrolling, and when the work resumes two dotted lines with a narrow gap between them mark the cut. The time axis and the hover readout keep showing the real time on both sides.
 
-Collapse the chart with the chevron next to its title and the header keeps showing the current CPU and temperature readings, as in the compact view above, just the current readings. Siesta remembers whether you left the chart and the log open or closed.
+Collapse the chart with the chevron next to its title and the current CPU, GPU and temperature readings take the place of the title, as in the compact view above. Siesta remembers whether you left the chart and the log open or closed.
 
 <a href="Resources/siesta-interface-expanded.webp">
-  <img src="Resources/siesta-interface-expanded.webp" alt="Siesta popover in light and dark mode, with a 30-minute work interval, 12 minutes until the next rest, and the graph expanded to show CPU, temperature and shaded rest periods">
+  <img src="Resources/siesta-interface-expanded.webp" alt="Siesta popover in light and dark mode, with a 30-minute work interval, 12 minutes until the next rest, and the graph expanded to show CPU, GPU, temperature and shaded rest periods">
 </a>
 
 <br>
@@ -79,7 +81,7 @@ Collapse the chart with the chevron next to its title and the header keeps showi
 Drag the popover by its header, or by any empty spot between its blocks, and it lifts off the menu bar: it widens as it follows the pointer and, where you let go, becomes a regular window that floats above your other apps, handy when you want to keep an eye on a long queue without reopening the popover. It holds exactly the same panel, with a little more room for the activity log, and it reopens where you left it. Here the chart is collapsed and **Activity log** is expanded, showing recent pauses and resumes. The button at the right of the title bar takes the panel back to the menu bar, and **Open the panel as** in the settings chooses which of the two the cat opens.
 
 <a href="Resources/siesta-interface-detached.webp">
-  <img src="Resources/siesta-interface-detached.webp" alt="Detached Siesta window in light and dark mode during a five-minute rest, with current CPU and temperature readings and the expanded activity log">
+  <img src="Resources/siesta-interface-detached.webp" alt="Detached Siesta window in light and dark mode during a five-minute rest, with current CPU, GPU and temperature readings and the expanded activity log">
 </a>
 
 <br>
@@ -89,9 +91,9 @@ Drag the popover by its header, or by any empty spot between its blocks, and it 
 
 The gear next to the version number slides the panel over to the settings page; the back chevron or Esc slides it back. Every change applies at once.
 
-- **General.** Open Siesta at login, follow the system appearance or force light or dark, open the panel as a popover or as a window, and choose what the menu bar shows next to the cat: the countdown, the encoder's CPU usage and the hottest core's temperature, in any combination.
+- **General.** Open Siesta at login, follow the system appearance or force light or dark, open the panel as a popover or as a window, and choose what the menu bar shows next to the cat: the countdown, the encoder's CPU usage, the GPU usage and the hottest core's temperature, in any combination.
 - **Cycle.** **Start automatically** starts the cycle as soon as HandBrake starts working, so a queue launched in a hurry still gets its rests. **Save the activity log to a file** keeps a copy of every log line in `~/Library/Logs/Siesta/Siesta.log`, with a link that shows it in the Finder.
-- **Chart.** Smooth curves, magnetic edges (rest bands and breaks pull the hover readout), and Hold the chart while idle, described above.
+- **Chart.** Smooth curves, magnetic edges (rest bands and the dotted lines of a cut pull the hover readout), and Hold the chart while idle, described above.
 - **Updates.** Check for new releases automatically, install them automatically, or check now.
 
 <a href="Resources/siesta-interface-settings.webp">
@@ -167,7 +169,6 @@ kill -CONT $(pgrep -x HandBrakeXPCService)
 A few things I would like Siesta to do, in no particular order and with no dates attached:
 
 - **More apps.** Profiles for other long-running jobs, such as Tdarr or Topaz Video AI, chosen from a list of running programs.
-- **GPU in the chart.** Alongside CPU and temperature, where it says something meaningful about the encode.
 - **A thermal mode.** Rest when the chip has been above a chosen temperature for a while, instead of after a fixed number of minutes.
 
 Smaller refinements will arrive along the way.

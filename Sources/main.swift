@@ -3056,12 +3056,13 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
     // The menu bar item is one template image, so macOS tints it like any menu bar icon: the cat,
     // the countdown in the menu bar font, then each reading as Stats shows it — a small caption over
-    // the value, left aligned. Every gap is measured on the ink, not on the boxes: 7 pt after the cat,
-    // 11 pt between the items (as Stats spaces its own), and after the last one the same margin the cat has on its left.
+    // the value, left aligned. Every gap is measured on the ink, not on the boxes: 7 pt between the cat and the
+    // countdown, 10 pt before each reading (as Stats spaces its own), and after the last one the same margin the cat has on its left.
     // A column keeps room for two digits (the temperature for three), so the item only widens at 100%.
     static let menuBarHeight: CGFloat = 22, catSize: CGFloat = 20
-    /// Ink after the cat; between the items (the countdown and each reading) a wider gap, as Stats keeps.
-    static let menuBarGap: CGFloat = 7, menuBarItemGap: CGFloat = 11
+    /// Ink after the cat when the countdown follows it (the two read as one icon); before a reading,
+    /// after the cat as between the items, the wider gap Stats keeps.
+    static let menuBarGap: CGFloat = 7, menuBarItemGap: CGFloat = 10
     /// Horizontal ink of a line of text, from its drawing origin.
     static func inkX(_ a: NSAttributedString) -> (min: CGFloat, max: CGFloat) {
         let b = CTLineGetBoundsWithOptions(CTLineCreateWithAttributedString(a), .useGlyphPathBounds)
@@ -3113,7 +3114,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         var cursor = catInk.max   // right edge of the ink so far
         var origins: [CGFloat] = []
         for (n, item) in items.enumerated() {
-            let x = cursor + (n == 0 ? menuBarGap : menuBarItemGap) - item.ink.min
+            let x = cursor + (n == 0 && time != nil ? menuBarGap : menuBarItemGap) - item.ink.min
             origins.append(x)
             cursor = x + item.ink.max
         }
