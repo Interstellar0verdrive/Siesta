@@ -425,6 +425,15 @@ final class ChartView: NSView, HandCursorView {
     /// Idle time cut out of the chart is marked by a strip this wide: a dotted line, 6 pt of empty
     /// space, a dotted line. The lines before and after it end right on the dotted lines.
     static let seamStrip: CGFloat = 8
+    /// How many samples at the end were recorded after the encoder last worked (`lastBusy`, wall clock).
+    /// When the chart starts holding they go: the cycle keeps counting HandBrake as working for `idleGrace`
+    /// seconds (a gap between queue items), and after a rest it was frozen, so without this the break would
+    /// sit 10 s of flat line after the real stop. The first sample after the stop stays: it carries the drop,
+    /// or the end of the rest band.
+    static func idleTail(_ samples: [Sample], lastBusy: TimeInterval) -> Int {
+        guard let k = samples.lastIndex(where: { $0.clock <= lastBusy }) else { return 0 }
+        return max(0, samples.count - (k + 2))
+    }
     /// Set while "Hold the chart while idle" holds an idle stretch long enough to be cut out.
     var holding = false { didSet { if holding != oldValue { needsDisplay = true } } }
     /// The strips drawn last: the time of the first sample after each cut and the strip's left edge.
@@ -3466,6 +3475,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         cpuSum += percentOfMachine(rawCpu); cpuTicks += 1
         if let g = gpuMeter.read() { gpuSum += g; gpuTicks += 1 }
         let t = Date.timeIntervalSinceReferenceDate
+        if phase == .resting || rawCpu >= threshold { lastBusy = t }   // really working (or resting), not just within the grace
         let chartNow = t - heldTime
         // dense while the chart is still filling its first 5 minutes, then one point every 5 s
         let every: TimeInterval = (chart.samples.first.map { chartNow - $0.t } ?? 0) < chart.minWindow ? 1 : 5
@@ -3481,6 +3491,14 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         // Working means busy now, whether or not a cycle runs (Start automatically waits a few seconds).
         let working = phase == .resting || (phase == .working && isEncoding) || rawCpu >= threshold
         if flag("holdChart", false) && !working {
+            // the hold starts: the flat tail recorded after the real stop goes, the break sits where work stopped
+            if !holding, let busy = lastBusy {
+                let n = ChartView.idleTail(chart.samples, lastBusy: busy)
+                if n > 0 {
+                    chart.samples.removeLast(n); chart.needsDisplay = true
+                    if debugSamples { debugPrint("TRIM \(n) idle sample\(n == 1 ? "" : "s") after the last work") }
+                }
+            }
             if let lastT = chart.samples.last?.t, chartNow - lastT > every + 5 { chart.holding = true }
             if debugSamples { debugPrint(String(format: "HELD cpu %.1f%% (raw %.0f, threshold %.0f)  phase %@", cpu, rawCpu, threshold, "\(phase)")) }
             holding = true; return
@@ -3519,6 +3537,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     var gpuSum = 0.0, gpuTicks = 0
     /// Idle time cut out of the chart so far, and whether an idle stretch is being held right now.
     var heldTime: TimeInterval = 0, holding = false
+    /// Wall clock of the last tick the encoder was really working (or frozen in a rest).
+    var lastBusy: TimeInterval?
 
     func tick() {
         let now = Date()
@@ -3844,6 +3864,21 @@ if let i = CommandLine.arguments.firstIndex(of: "--debug-hold"), i + 1 < Command
     rep.draw(in: chart.bounds, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
     image.unlockFocus()
     if let tiff = image.tiffRepresentation { try? NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: CommandLine.arguments[i + 1])) }
+    exit(0)
+}
+if CommandLine.arguments.contains("--debug-trim") {
+    // the idle tail dropped when the chart starts holding: one point every 5 s
+    func run(_ name: String, rest: Range<Double>?, stop: Double, recordedUntil: Double, lastBusy: Double) {
+        let samples = stride(from: 0.0, through: recordedUntil, by: 5).map { t in Sample(t: t, cpu: t <= stop ? 80 : 0, temp: 70, resting: rest?.contains(t) ?? false) }
+        let n = ChartView.idleTail(samples, lastBusy: lastBusy)
+        let kept = samples.dropLast(n)
+        print(String(format: "%@: last busy %.0f s, recorded to %.0f s → drop %d, chart ends at %.0f s (%@)", name, lastBusy, recordedUntil, n,
+                     kept.last!.t, kept.last!.resting ? "resting" : "working"))
+    }
+    run("HandBrake paused during a rest (rest 60–120 s)", rest: 60..<120, stop: 59, recordedUntil: 130, lastBusy: 119)
+    run("HandBrake stops while working at 47 s", rest: nil, stop: 47, recordedUntil: 57, lastBusy: 47)
+    run("stops on a sample (45 s)", rest: nil, stop: 45, recordedUntil: 55, lastBusy: 45)
+    run("no tail (held right away)", rest: nil, stop: 50, recordedUntil: 55, lastBusy: 52)
     exit(0)
 }
 if CommandLine.arguments.contains("--debug-magnet") {
