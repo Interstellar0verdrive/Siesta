@@ -2829,7 +2829,10 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         setUpdateChip(visible: true)
     }
 
-    /// Mentions a new release once per version: the footer link alone is easy to miss.
+    /// Mentions a new release once per version: the chip alone is easy to miss. The alert is a plain
+    /// window, not `runModal`: a modal session would stop the cycle timer (an encoder frozen for a rest
+    /// would stay frozen until the alert is answered) and swallow Quit, logout and kill.
+    var updateAlert: NSAlert?
     func announceUpdate(_ version: String) {
         guard announcedThisRun != version else { return }   // once per launch; "Later" means next launch
         announcedThisRun = version
@@ -2841,11 +2844,24 @@ final class App: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             : "Click “Update to \(version)” at the top of the panel to open the release page."
         alert.addButton(withTitle: canSelfUpdate && updateZip != nil ? "Update now" : "Open release page")
         alert.addButton(withTitle: "Later")
+        alert.buttons[0].target = self; alert.buttons[0].action = #selector(openUpdate)
+        alert.buttons[1].target = self; alert.buttons[1].action = #selector(dismissUpdateAlert)
+        alert.layout()
+        updateAlert?.window.orderOut(nil)
+        updateAlert = alert
+        alert.window.level = .modalPanel
+        alert.window.center()
         NSApp.activate(ignoringOtherApps: true)
-        if alert.runModal() == .alertFirstButtonReturn { openUpdate() }
+        alert.window.makeKeyAndOrderFront(nil)
+    }
+
+    @objc func dismissUpdateAlert() {
+        updateAlert?.window.orderOut(nil)
+        updateAlert = nil
     }
 
     @objc func openUpdate() {
+        dismissUpdateAlert()
         if updateZip != nil && updateSha != nil && canSelfUpdate { performUpdate() }
         else if let url = updateURL { NSWorkspace.shared.open(url) }
     }
